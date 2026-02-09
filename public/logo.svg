@@ -1,15 +1,59 @@
-<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+<svg viewBox="0 0 200 240" xmlns="http://www.w3.org/2000/svg" width="200" height="240">
   <!-- Outer circle background -->
-  <circle cx="100" cy="100" r="95" fill="#0052cc" opacity="0.1" stroke="#0052cc" stroke-width="2"/>
+  <circle cx="100" cy="80" r="75" fill="#0052cc" opacity="0.1" stroke="#0052cc" stroke-width="2"/>
   
   <!-- Shield shape -->
-  <path d="M 100 40 L 140 60 L 140 110 Q 100 150 100 150 Q 60 110 60 110 L 60 60 Z" 
+  <path d="M 100 20 L 140 40 L 140 90 Q 100 130 100 130 Q 60 90 60 90 L 60 40 Z" 
         fill="#0052cc" stroke="#0052cc" stroke-width="1.5"/>
   
   <!-- Checkmark inside shield -->
-  <path d="M 80 105 L 95 120 L 125 75" 
+  <path d="M 80 85 L 95 100 L 125 55" 
         stroke="white" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
   
   <!-- Accent ring -->
-  <circle cx="100" cy="100" r="100" fill="none" stroke="#00a3e0" stroke-width="1" opacity="0.5"/>
+  <circle cx="100" cy="80" r="80" fill="none" stroke="#00a3e0" stroke-width="1" opacity="0.5"/>
+  
+  <!-- Versión 1.0 -->
+  <text x="100" y="155" 
+        font-family="Arial, sans-serif" 
+        font-size="12" 
+        font-weight="bold" 
+        text-anchor="middle" 
+        fill="#0052cc">
+    v1.0.0
+  </text>
+  
+  <!-- Línea divisoria -->
+  <line x1="20" y1="162" x2="180" y2="162" stroke="#0052cc" stroke-width="0.8" opacity="0.3"/>
+  
+  <!-- Copyright -->
+  <text x="100" y="178" 
+        font-family="Arial, sans-serif" 
+        font-size="8" 
+        font-weight="600"
+        text-anchor="middle" 
+        fill="#0052cc"
+        opacity="0.8">
+    © V.I.S.O.R. Oficina de Seguros
+  </text>
+  
+  <!-- Full name line 1 -->
+  <text x="100" y="192" 
+        font-family="Arial, sans-serif" 
+        font-size="7" 
+        text-anchor="middle" 
+        fill="#0052cc"
+        opacity="0.7">
+    Vigilancia, Inspección y Supervisión
+  </text>
+  
+  <!-- Full name line 2 -->
+  <text x="100" y="204" 
+        font-family="Arial, sans-serif" 
+        font-size="7" 
+        text-anchor="middle" 
+        fill="#0052cc"
+        opacity="0.7">
+    de Operatividad y Registros
+  </text>
 </svg>
