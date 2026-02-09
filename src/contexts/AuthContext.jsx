@@ -3,23 +3,38 @@ import { supabase } from "../lib/supabaseClient";
 
 const AuthContext = createContext(null);
 
-// Tiempo de inactividad antes del logout automático (10 minutos)
-const INACTIVITY_TIMEOUT = 10 * 60 * 1000;
+// Configuración
+const INACTIVITY_TIMEOUT = 10 * 60 * 1000; // 10 minutos
+const PROFILE_FETCH_TIMEOUT = 8000; // 8 segundos
+const MAX_RETRIES = 3; // Reintentos máximos para fetchProfile
+
+// Sistema de logging mejorado
+const DEBUG_MODE = localStorage.getItem('AUTH_DEBUG') === 'true';
+
+const logger = {
+  debug: (...args) => DEBUG_MODE && console.log('🔍 [AUTH DEBUG]', ...args),
+  info: (...args) => console.log('ℹ️ [AUTH INFO]', ...args),
+  warn: (...args) => console.warn('⚠️ [AUTH WARN]', ...args),
+  error: (...args) => console.error('❌ [AUTH ERROR]', ...args),
+  success: (...args) => console.log('✅ [AUTH SUCCESS]', ...args)
+};
 
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
   const initialized = useRef(false);
   const inactivityTimerRef = useRef(null);
+  const retryCountRef = useRef(0);
 
-  const fetchProfile = async (userId) => {
+  const fetchProfile = async (userId, retryCount = 0) => {
     try {
-      console.log("fetchProfile: Iniciando para userId:", userId);
+      logger.debug(`Fetching profile for userId: ${userId} (intento ${retryCount + 1}/${MAX_RETRIES})`);
       
-      // Timeout de 5 segundos
+      // Timeout configurable
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Timeout fetchProfile")), 5000)
+        setTimeout(() => reject(new Error("Timeout al obtener perfil del usuario")), PROFILE_FETCH_TIMEOUT)
       );
 
       const queryPromise = supabase
@@ -31,14 +46,60 @@ export function AuthProvider({ children }) {
       const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
 
       if (error) {
-        console.warn("fetchProfile: Error en query:", error.message);
+        logger.warn(`Error en fetchProfile: ${error.message}`, error);
+        
+        // Detectar errores específicos
+        if (error.message?.includes('row-level security') || error.code === 'PGRST116') {
+          logger.error("🚨 RLS está bloqueando el acceso al perfil");
+          setAuthError("Error de seguridad: No se pudo cargar el perfil de usuario. Contacte al administrador.");
+          throw new Error("RLS_POLICY_ERROR");
+        }
+        
+        if (error.code === 'PGRST301') {
+          logger.error("🚨 No se encontró el perfil del usuario");
+          setAuthError("No se encontró el perfil de usuario. Contacte al administrador.");
+          throw new Error("PROFILE_NOT_FOUND");
+        }
+        
+        // Reintentar en caso de errores de red
+        if (retryCount < MAX_RETRIES && (error.message?.includes('fetch') || error.message?.includes('network'))) {
+          logger.info(`Reintentando obtener perfil... (${retryCount + 1}/${MAX_RETRIES})`);
+          await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1))); // Backoff exponencial
+          return fetchProfile(userId, retryCount + 1);
+        }
+        
+        // Si falla después de todos los reintentos, retornar perfil por defecto
+        logger.warn("Usando perfil por defecto después de múltiples errores");
         return { user_id: userId, nombre: "", role: "auditor", activo: true };
       }
       
-      console.log("fetchProfile: Datos obtenidos:", data);
+      if (!data) {
+        logger.error("No se recibieron datos del perfil");
+        setAuthError("No se pudo cargar el perfil de usuario.");
+        return { user_id: userId, nombre: "", role: "auditor", activo: true };
+      }
+      
+      logger.success("Perfil obtenido correctamente", data);
+      setAuthError(null); // Limpiar error si todo está bien
+      retryCountRef.current = 0; // Resetear contador de reintentos
       return data;
+      
     } catch (e) {
-      console.warn("fetchProfile: Exception:", e.message);
+      logger.error(`Exception en fetchProfile: ${e.message}`);
+      
+      // No reintentar si es un error específico conocido
+      if (e.message === 'RLS_POLICY_ERROR' || e.message === 'PROFILE_NOT_FOUND') {
+        return null; // Forzar logout
+      }
+      
+      // Reintentar en caso de timeout u otros errores
+      if (retryCount < MAX_RETRIES) {
+        logger.info(`Reintentando después de exception... (${retryCount + 1}/${MAX_RETRIES})`);
+        await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1)));
+        return fetchProfile(userId, retryCount + 1);
+      }
+      
+      logger.warn("Usando perfil por defecto después de exception");
       return { user_id: userId, nombre: "", role: "auditor", activo: true };
     }
   };
@@ -65,35 +126,105 @@ export function AuthProvider({ children }) {
   };
 
   useEffect(() => {
-    console.log("AuthProvider: Iniciando...");
+    logger.info("AuthProvider inicializando...");
     let isMount = true;
 
-    // Solo usar onAuthStateChange - es más confiable
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, s) => {
-      console.log("AuthProvider: onAuthStateChange disparado", _event);
+    // Cargar sesión inicial
+    const initAuth = async () => {
+      try {
+        const { data: { session: initialSession }, error } = await supabase.auth.getSession();
+        
+        if (error) {
+          logger.error("Error al obtener sesión inicial:", error.message);
+          setAuthError("Error al inicializar autenticación");
+          setLoading(false);
+          return;
+        }
+        
+        if (initialSession?.user && isMount) {
+          logger.info("Sesión inicial encontrada, cargando perfil...");
+          const p = await fetchProfile(initialSession.user.id);
+          
+          if (!p) {
+            // Error crítico, forzar logout
+            logger.error("No se pudo cargar el perfil, forzando logout");
+            await supabase.auth.signOut();
+            setSession(null);
+            setProfile(null);
+            setLoading(false);
+            return;
+          }
+          
+          setSession(initialSession);
+          setProfile(p);
+          resetInactivityTimer();
+        }
+        
+        setLoading(false);
+      } catch (err) {
+        logger.error("Exception en initAuth:", err);
+        setAuthError("Error al inicializar");
+        setLoading(false);
+      }
+    };
+
+    initAuth();
+
+    // Escuchar cambios de autenticación
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, s) => {
+      logger.info(`Auth state change: ${event}`);
       
       if (!isMount) return;
 
-      setSession(s);
-      if (s?.user) {
-        console.log("AuthProvider: Hay usuario, obteniendo perfil...");
-        const p = await fetchProfile(s.user.id);
-        console.log("AuthProvider: Perfil obtenido", p);
-        setProfile(p);
-        // Iniciar el timer de inactividad cuando hay sesión activa
-        resetInactivityTimer();
-      } else {
-        console.log("AuthProvider: Sin usuario");
-        setProfile(null);
-        // Detener el timer cuando no hay sesión
-        stopInactivityTimer();
+      // Manejar diferentes eventos
+      switch (event) {
+        case 'SIGNED_IN':
+        case 'TOKEN_REFRESHED':
+          logger.info("Usuario autenticado, obteniendo perfil...");
+          setSession(s);
+          
+          if (s?.user) {
+            const p = await fetchProfile(s.user.id);
+            
+            if (!p) {
+              logger.error("Perfil no disponible después de login, cerrando sesión");
+              await supabase.auth.signOut();
+              setSession(null);
+              setProfile(null);
+              setLoading(false);
+              return;
+            }
+            
+            setProfile(p);
+            resetInactivityTimer();
+          }
+          break;
+          
+        case 'SIGNED_OUT':
+          logger.info("Usuario cerró sesión");
+          setSession(null);
+          setProfile(null);
+          setAuthError(null);
+          stopInactivityTimer();
+          break;
+          
+        case 'USER_UPDATED':
+          logger.info("Usuario actualizado");
+          if (s?.user) {
+            const p = await fetchProfile(s.user.id);
+            if (p) setProfile(p);
+          }
+          break;
+          
+        default:
+          logger.debug(`Evento no manejado: ${event}`);
       }
 
-      console.log("AuthProvider: Carga completada");
       setLoading(false);
     });
 
     return () => {
+      logger.debug("AuthProvider cleanup");
       isMount = false;
       subscription?.unsubscribe();
       stopInactivityTimer();
@@ -111,9 +242,19 @@ export function AuthProvider({ children }) {
       resetInactivityTimer();
     };
 
-    // Agregar event listeners
+    // Agregar event listeners con throttling para mejor performance
+    let throttleTimer = null;
+    const throttledHandleActivity = () => {
+      if (!throttleTimer) {
+        throttleTimer = setTimeout(() => {
+          handleActivity();
+          throttleTimer = null;
+        }, 1000); // Throttle de 1 segundo
+      }
+    };
+
     events.forEach(event => {
-      window.addEventListener(event, handleActivity);
+      window.addEventListener(event, throttledHandleActivity, { passive: true });
     });
 
     // Iniciar el timer al montar
@@ -122,17 +263,31 @@ export function AuthProvider({ children }) {
     // Limpiar event listeners al desmontar
     return () => {
       events.forEach(event => {
-        window.removeEventListener(event, handleActivity);
+        window.removeEventListener(event, throttledHandleActivity);
       });
+      if (throttleTimer) clearTimeout(throttleTimer);
       stopInactivityTimer();
     };
   }, [session?.user]);
 
   const signOut = async () => {
+    logger.info("Cerrando sesión...");
     stopInactivityTimer();
-    await supabase.auth.signOut();
-    setSession(null);
-    setProfile(null);
+    
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        logger.error("Error al cerrar sesión:", error.message);
+      } else {
+        logger.success("Sesión cerrada correctamente");
+      }
+    } catch (err) {
+      logger.error("Exception al cerrar sesión:", err);
+    } finally {
+      setSession(null);
+      setProfile(null);
+      setAuthError(null);
+    }
   };
 
   const value = {
@@ -141,6 +296,7 @@ export function AuthProvider({ children }) {
     profile,
     role: profile?.role ?? null,
     loading,
+    authError, // Exponer errores de autenticación
     signOut,
     isAdmin: profile?.role === "admin",
     isAuditor: profile?.role === "auditor",
