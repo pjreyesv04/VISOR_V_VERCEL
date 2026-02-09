@@ -36,6 +36,9 @@ export function exportSupervisionesToExcel(supervisiones, respuestasMap, paramet
           Codigo: p.codigo || "",
           Parametro: p.descripcion || "",
           Cumple: r?.valor_bool === true ? "SI" : r?.valor_bool === false ? "NO" : "",
+          "Valor Fecha": r?.valor_fecha || "",
+          "Valor Cantidad": r?.valor_cantidad != null ? r.valor_cantidad : "",
+          "Valor Texto": r?.valor_texto || "",
           Observacion: r?.observacion || "",
         });
       }

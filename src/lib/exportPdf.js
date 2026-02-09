@@ -32,25 +32,38 @@ export function exportSupervisionPdf(supervision, respuestas, parametros, risNom
     .filter((p) => p.activo !== false)
     .map((p) => {
       const r = respuestas[p.id];
+
+      // Valor condicional (fecha, cantidad o texto)
+      let detalle = "";
+      if (r?.valor_fecha) {
+        detalle = new Date(r.valor_fecha + "T00:00:00").toLocaleDateString();
+      } else if (r?.valor_cantidad != null) {
+        detalle = String(r.valor_cantidad);
+      } else if (r?.valor_texto) {
+        detalle = r.valor_texto;
+      }
+
       return [
         p.codigo || "",
         p.descripcion || "",
         r?.valor_bool === true ? "SI" : r?.valor_bool === false ? "NO" : "—",
+        detalle,
         r?.observacion || "",
       ];
     });
 
   doc.autoTable({
     startY: 65,
-    head: [["Codigo", "Parametro", "Cumple", "Observacion"]],
+    head: [["Codigo", "Parametro", "Cumple", "Detalle", "Observacion"]],
     body: tableData,
     styles: { fontSize: 7, cellPadding: 2 },
     headStyles: { fillColor: [41, 128, 185], textColor: 255 },
     columnStyles: {
-      0: { cellWidth: 15 },
-      1: { cellWidth: 80 },
-      2: { cellWidth: 15 },
-      3: { cellWidth: 70 },
+      0: { cellWidth: 12 },
+      1: { cellWidth: 65 },
+      2: { cellWidth: 12 },
+      3: { cellWidth: 35 },
+      4: { cellWidth: 56 },
     },
   });
 

@@ -50,7 +50,7 @@ export function useSupervisionData(supervisionId) {
       // 3. Parametros
       const { data: params } = await supabase
         .from("parametros")
-        .select("id, seccion, codigo, descripcion, requiere_observacion, orden, activo")
+        .select("id, seccion, codigo, descripcion, requiere_observacion, orden, activo, tipo_campo_condicional, condicion_campo, etiqueta_campo_condicional")
         .order("seccion", { ascending: true })
         .order("orden", { ascending: true });
 
@@ -59,7 +59,7 @@ export function useSupervisionData(supervisionId) {
       // 4. Respuestas
       const { data: resp } = await supabase
         .from("respuestas")
-        .select("parametro_id, valor_bool, observacion")
+        .select("parametro_id, valor_bool, observacion, valor_fecha, valor_cantidad, valor_texto")
         .eq("supervision_id", supervisionId);
 
       const map = {};
@@ -67,6 +67,9 @@ export function useSupervisionData(supervisionId) {
         map[r.parametro_id] = {
           valor_bool: r.valor_bool ?? null,
           observacion: r.observacion ?? "",
+          valor_fecha: r.valor_fecha ?? null,
+          valor_cantidad: r.valor_cantidad ?? null,
+          valor_texto: r.valor_texto ?? "",
         };
       });
       setRespuestas(map);

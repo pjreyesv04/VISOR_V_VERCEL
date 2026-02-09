@@ -100,7 +100,7 @@ export default function SupervisionForm() {
 
   const setResp = (paramId, patch) => {
     setRespuestas((prev) => {
-      const current = prev[paramId] || { valor_bool: null, observacion: "" };
+      const current = prev[paramId] || { valor_bool: null, observacion: "", valor_fecha: null, valor_cantidad: null, valor_texto: "" };
       return { ...prev, [paramId]: { ...current, ...patch } };
     });
   };
@@ -240,7 +240,7 @@ export default function SupervisionForm() {
       // 6) Parámetros
       const { data: params, error: pErr } = await supabase
         .from("parametros")
-        .select("id,seccion,codigo,descripcion,requiere_observacion,orden,activo")
+        .select("id,seccion,codigo,descripcion,requiere_observacion,orden,activo,tipo_campo_condicional,condicion_campo,etiqueta_campo_condicional")
         .order("seccion", { ascending: true })
         .order("orden", { ascending: true });
 
@@ -250,7 +250,7 @@ export default function SupervisionForm() {
       // 7) Respuestas existentes
       const { data: resp } = await supabase
         .from("respuestas")
-        .select("parametro_id,valor_bool,observacion")
+        .select("parametro_id,valor_bool,observacion,valor_fecha,valor_cantidad,valor_texto")
         .eq("supervision_id", supervisionId);
 
       const map = {};
@@ -258,6 +258,9 @@ export default function SupervisionForm() {
         map[r.parametro_id] = {
           valor_bool: r.valor_bool ?? null,
           observacion: r.observacion ?? "",
+          valor_fecha: r.valor_fecha ?? null,
+          valor_cantidad: r.valor_cantidad ?? null,
+          valor_texto: r.valor_texto ?? "",
         };
       });
       setRespuestas(map);
@@ -429,12 +432,15 @@ export default function SupervisionForm() {
 
       if (supErr) throw supErr;
 
-      // 3) Guardar respuestas (solo si/no y observación por parámetro)
+      // 3) Guardar respuestas (si/no + campos condicionales + observación)
       const rows = Object.entries(respuestas).map(([parametro_id, r]) => ({
         supervision_id: supervisionId,
         parametro_id,
         valor_bool: r.valor_bool ?? null,
         observacion: r.observacion ?? null,
+        valor_fecha: r.valor_fecha ?? null,
+        valor_cantidad: r.valor_cantidad ?? null,
+        valor_texto: r.valor_texto ?? null,
       }));
 
       if (rows.length > 0) {
@@ -463,7 +469,18 @@ export default function SupervisionForm() {
   const imprimir = () => window.print();
 
   const renderParametroSiNo = (p) => {
-    const r = respuestas[p.id] || { valor_bool: null, observacion: "" };
+    const r = respuestas[p.id] || { valor_bool: null, observacion: "", valor_fecha: null, valor_cantidad: null, valor_texto: "" };
+
+    // Determinar si el campo condicional debe ser visible
+    const mostrarCampoCondicional = () => {
+      if (!p.tipo_campo_condicional) return false;
+      if (p.condicion_campo === "siempre") return true;
+      if (p.condicion_campo === "si" && r.valor_bool === true) return true;
+      if (p.condicion_campo === "no" && r.valor_bool === false) return true;
+      return false;
+    };
+
+    const showConditional = mostrarCampoCondicional();
 
     return (
       <div className="mb-3" key={p.id}>
@@ -496,13 +513,66 @@ export default function SupervisionForm() {
           </label>
         </div>
 
-        {/* Observación por ítem (si el parámetro lo pide) */}
+        {/* Campo condicional: Fecha */}
+        {showConditional && p.tipo_campo_condicional === "fecha" && (
+          <div className="mt-2">
+            <label className="form-label text-primary fw-semibold">
+              {p.etiqueta_campo_condicional || "Fecha"}
+            </label>
+            <input
+              type="date"
+              className="form-control"
+              style={{ maxWidth: 250 }}
+              value={r.valor_fecha || ""}
+              onChange={(e) => setResp(p.id, { valor_fecha: e.target.value || null })}
+            />
+          </div>
+        )}
+
+        {/* Campo condicional: Cantidad */}
+        {showConditional && p.tipo_campo_condicional === "cantidad" && (
+          <div className="mt-2">
+            <label className="form-label text-primary fw-semibold">
+              {p.etiqueta_campo_condicional || "Cantidad"}
+            </label>
+            <input
+              type="number"
+              className="form-control"
+              style={{ maxWidth: 200 }}
+              min={0}
+              value={r.valor_cantidad ?? ""}
+              onChange={(e) =>
+                setResp(p.id, {
+                  valor_cantidad: e.target.value === "" ? null : parseInt(e.target.value, 10),
+                })
+              }
+            />
+          </div>
+        )}
+
+        {/* Campo condicional: Texto / Nombre */}
+        {showConditional && p.tipo_campo_condicional === "texto" && (
+          <div className="mt-2">
+            <label className="form-label text-primary fw-semibold">
+              {p.etiqueta_campo_condicional || "Texto"}
+            </label>
+            <input
+              type="text"
+              className="form-control"
+              value={r.valor_texto || ""}
+              onChange={(e) => setResp(p.id, { valor_texto: e.target.value })}
+              placeholder="Ingrese..."
+            />
+          </div>
+        )}
+
+        {/* Observación por ítem */}
         {p.requiere_observacion ? (
           <div className="mt-2">
             <label className="form-label">Observación</label>
             <textarea
               className="form-control"
-              rows={3}
+              rows={2}
               value={r.observacion || ""}
               onChange={(e) => setResp(p.id, { observacion: e.target.value })}
               placeholder="Detalle / sustento..."

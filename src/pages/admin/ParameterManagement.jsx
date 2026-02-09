@@ -14,9 +14,12 @@ export default function ParameterManagement() {
     seccion: "",
     codigo: "",
     descripcion: "",
-    requiere_observacion: false,
+    requiere_observacion: true,
     orden: 0,
     activo: true,
+    tipo_campo_condicional: "",
+    condicion_campo: "",
+    etiqueta_campo_condicional: "",
   });
   const [saving, setSaving] = useState(false);
 
@@ -45,7 +48,7 @@ export default function ParameterManagement() {
 
   const openCreate = () => {
     setEditing(null);
-    setFormData({ seccion: "", codigo: "", descripcion: "", requiere_observacion: false, orden: 0, activo: true });
+    setFormData({ seccion: "", codigo: "", descripcion: "", requiere_observacion: true, orden: 0, activo: true, tipo_campo_condicional: "", condicion_campo: "", etiqueta_campo_condicional: "" });
     setShowModal(true);
   };
 
@@ -55,9 +58,12 @@ export default function ParameterManagement() {
       seccion: p.seccion || "",
       codigo: p.codigo || "",
       descripcion: p.descripcion || "",
-      requiere_observacion: p.requiere_observacion || false,
+      requiere_observacion: p.requiere_observacion ?? true,
       orden: p.orden || 0,
       activo: p.activo !== false,
+      tipo_campo_condicional: p.tipo_campo_condicional || "",
+      condicion_campo: p.condicion_campo || "",
+      etiqueta_campo_condicional: p.etiqueta_campo_condicional || "",
     });
     setShowModal(true);
   };
@@ -77,6 +83,9 @@ export default function ParameterManagement() {
       requiere_observacion: formData.requiere_observacion,
       orden: formData.orden,
       activo: formData.activo,
+      tipo_campo_condicional: formData.tipo_campo_condicional || null,
+      condicion_campo: formData.condicion_campo || null,
+      etiqueta_campo_condicional: formData.etiqueta_campo_condicional || null,
     };
 
     if (editing) {
@@ -161,6 +170,7 @@ export default function ParameterManagement() {
                     <th>Seccion</th>
                     <th>Descripcion</th>
                     <th style={{ width: 80 }}>Obs.</th>
+                    <th style={{ width: 120 }}>Tipo Campo</th>
                     <th style={{ width: 80 }}>Estado</th>
                     <th className="text-end" style={{ width: 150 }}>Acciones</th>
                   </tr>
@@ -173,6 +183,13 @@ export default function ParameterManagement() {
                       <td>{p.seccion || "—"}</td>
                       <td>{p.descripcion}</td>
                       <td>{p.requiere_observacion ? "Si" : "No"}</td>
+                      <td>
+                        {p.tipo_campo_condicional ? (
+                          <span className="badge bg-info text-dark">
+                            {p.tipo_campo_condicional} ({p.condicion_campo || "?"})
+                          </span>
+                        ) : "—"}
+                      </td>
                       <td>
                         <span className={`badge ${p.activo ? "bg-success" : "bg-danger"}`}>
                           {p.activo ? "Activo" : "Inactivo"}
@@ -279,6 +296,50 @@ export default function ParameterManagement() {
                         id="activo"
                       />
                       <label className="form-check-label" htmlFor="activo">Activo</label>
+                    </div>
+                  </div>
+
+                  {/* Campo condicional */}
+                  <div className="mt-3">
+                    <label className="form-label fw-semibold">Campo condicional</label>
+                    <div className="row g-2">
+                      <div className="col-md-4">
+                        <label className="form-label" style={{ fontSize: "0.8rem" }}>Tipo de campo</label>
+                        <select
+                          className="form-select form-select-sm"
+                          value={formData.tipo_campo_condicional}
+                          onChange={(e) => setFormData({ ...formData, tipo_campo_condicional: e.target.value })}
+                        >
+                          <option value="">Ninguno (solo Si/No)</option>
+                          <option value="fecha">Fecha</option>
+                          <option value="cantidad">Cantidad (numero)</option>
+                          <option value="texto">Texto (nombre)</option>
+                        </select>
+                      </div>
+                      <div className="col-md-4">
+                        <label className="form-label" style={{ fontSize: "0.8rem" }}>Mostrar cuando</label>
+                        <select
+                          className="form-select form-select-sm"
+                          value={formData.condicion_campo}
+                          onChange={(e) => setFormData({ ...formData, condicion_campo: e.target.value })}
+                          disabled={!formData.tipo_campo_condicional}
+                        >
+                          <option value="">--</option>
+                          <option value="si">Respuesta es Si</option>
+                          <option value="no">Respuesta es No</option>
+                          <option value="siempre">Siempre visible</option>
+                        </select>
+                      </div>
+                      <div className="col-md-4">
+                        <label className="form-label" style={{ fontSize: "0.8rem" }}>Etiqueta del campo</label>
+                        <input
+                          className="form-control form-control-sm"
+                          value={formData.etiqueta_campo_condicional}
+                          onChange={(e) => setFormData({ ...formData, etiqueta_campo_condicional: e.target.value })}
+                          placeholder="Ej: Fecha de capacitacion"
+                          disabled={!formData.tipo_campo_condicional}
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -121,6 +121,23 @@ export default function SupervisionView() {
                           {p.codigo ? `${p.codigo}. ` : ""}
                           {p.descripcion}
                         </div>
+                        {/* Valores condicionales */}
+                        {r?.valor_fecha && (
+                          <small className="text-info d-block mt-1">
+                            <strong>{p.etiqueta_campo_condicional || "Fecha"}:</strong>{" "}
+                            {new Date(r.valor_fecha + "T00:00:00").toLocaleDateString()}
+                          </small>
+                        )}
+                        {r?.valor_cantidad != null && (
+                          <small className="text-info d-block mt-1">
+                            <strong>{p.etiqueta_campo_condicional || "Cantidad"}:</strong> {r.valor_cantidad}
+                          </small>
+                        )}
+                        {r?.valor_texto && (
+                          <small className="text-info d-block mt-1">
+                            <strong>{p.etiqueta_campo_condicional || "Detalle"}:</strong> {r.valor_texto}
+                          </small>
+                        )}
                         {r?.observacion && (
                           <small className="text-muted d-block mt-1">
                             Obs: {r.observacion}
