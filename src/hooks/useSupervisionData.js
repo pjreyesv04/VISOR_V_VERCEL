@@ -15,6 +15,7 @@ export function useSupervisionData(supervisionId) {
   const [supervision, setSupervision] = useState(null);
   const [risNombre, setRisNombre] = useState("");
   const [eessNombre, setEessNombre] = useState("");
+  const [auditorNombre, setAuditorNombre] = useState("");
   const [parametros, setParametros] = useState([]);
   const [respuestas, setRespuestas] = useState({});
   const [evidencias, setEvidencias] = useState([]);
@@ -29,7 +30,7 @@ export function useSupervisionData(supervisionId) {
       // 1. Supervision
       const { data: sup, error: supErr } = await supabase
         .from("supervisiones")
-        .select("*")
+        .select("*, auditor:user_profiles!auditor_id(nombre)")
         .eq("id", supervisionId)
         .single();
 
@@ -39,6 +40,13 @@ export function useSupervisionData(supervisionId) {
       }
 
       setSupervision(sup);
+
+      // Determinar nombre del auditor
+      if (sup.auditor_eliminado) {
+        setAuditorNombre(`Auditor eliminado (${sup.auditor_nombre_eliminado || "Desconocido"})`);
+      } else {
+        setAuditorNombre(sup.auditor?.nombre || "—");
+      }
 
       // 2. RIS + EESS nombres
       const { data: ris } = await supabase.from("ris").select("nombre").eq("id", sup.ris_id).single();
@@ -130,6 +138,7 @@ export function useSupervisionData(supervisionId) {
     supervision,
     risNombre,
     eessNombre,
+    auditorNombre,
     parametros,
     respuestas,
     evidencias,

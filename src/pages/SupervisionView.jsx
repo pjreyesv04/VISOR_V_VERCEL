@@ -9,7 +9,7 @@ export default function SupervisionView() {
   const nav = useNavigate();
   const { isAdmin } = useAuth();
 
-  const { loading, supervision, risNombre, eessNombre, respuestas, evidencias, firmaUrls, seccionesAgrupadas } =
+  const { loading, supervision, risNombre, eessNombre, auditorNombre, respuestas, evidencias, firmaUrls, seccionesAgrupadas } =
     useSupervisionData(id);
 
   if (loading) {
@@ -86,11 +86,17 @@ export default function SupervisionView() {
           <hr />
 
           <div className="row g-3">
-            <div className="col-md-6">
-              <small className="text-muted">Medico Jefe</small>
-              <div className="fw-semibold">{supervision.medico_jefe || "—"}</div>
+            <div className="col-md-4">
+              <small className="text-muted">Auditor</small>
+              <div className="fw-semibold" style={supervision.auditor_eliminado ? { fontStyle: "italic", color: "#6c757d" } : {}}>
+                {auditorNombre}
+              </div>
             </div>
-            <div className="col-md-6">
+            <div className="col-md-4">
+              <small className="text-muted">Medico Jefe</small>
+              <div className="fw-semibold">{supervision.medico_jefe || "\u2014"}</div>
+            </div>
+            <div className="col-md-4">
               <small className="text-muted">Digitador</small>
               <div className="fw-semibold">{supervision.digitador || "—"}</div>
             </div>

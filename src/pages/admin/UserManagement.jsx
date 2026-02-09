@@ -130,6 +130,61 @@ export default function UserManagement() {
     });
   };
 
+  const deleteUser = async (u) => {
+    if (u.user_id === currentUser?.id) {
+      toast.error("No puedes eliminarte a ti mismo");
+      return;
+    }
+
+    // Obtener conteo de supervisiones del usuario
+    const { count } = await supabase
+      .from("supervisiones")
+      .select("id", { count: "exact", head: true })
+      .eq("auditor_id", u.user_id);
+
+    const supervisionCount = count || 0;
+    const warningMessage = supervisionCount > 0
+      ? `\n\nEste usuario tiene ${supervisionCount} supervisión(es). Las supervisiones se mantendran pero se marcaran como "Auditor eliminado (${u.nombre})".`
+      : "\n\nEste usuario no tiene supervisiones registradas.";
+
+    setConfirmModal({
+      show: true,
+      title: "⚠️ Eliminar usuario",
+      message: `¿Estás seguro que deseas eliminar permanentemente a "${u.nombre}"?${warningMessage}\n\n⚠️ ESTA ACCIÓN NO SE PUEDE DESHACER`,
+      onConfirm: async () => {
+        const loadingToast = toast.loading("Eliminando usuario...");
+        
+        try {
+          // Llamar a la función SQL que elimina de forma segura
+          const { data, error } = await supabase.rpc("delete_user_safely", {
+            user_id_to_delete: u.user_id,
+          });
+
+          if (error) {
+            toast.error("Error eliminando usuario: " + error.message, { id: loadingToast });
+            return;
+          }
+
+          if (data && !data.success) {
+            toast.error(data.error || "Error desconocido", { id: loadingToast });
+            return;
+          }
+
+          toast.success(
+            `Usuario eliminado. ${data.supervisions_affected} supervisión(es) marcadas como "Auditor eliminado"`,
+            { id: loadingToast, duration: 5000 }
+          );
+          
+          fetchUsers();
+        } catch (err) {
+          toast.error("Error inesperado: " + err.message, { id: loadingToast });
+        }
+        
+        setConfirmModal({ show: false });
+      },
+    });
+  };
+
   const roleBadge = (role) => {
     const map = { admin: "bg-warning text-dark", auditor: "bg-primary", viewer: "bg-success" };
     return map[role] || "bg-secondary";
@@ -185,6 +240,13 @@ export default function UserManagement() {
                             onClick={() => toggleActivo(u)}
                           >
                             {u.activo ? "Desactivar" : "Activar"}
+                          </button>
+                          <button
+                            className="btn btn-sm btn-outline-danger"
+                            onClick={() => deleteUser(u)}
+                            title="Eliminar usuario permanentemente"
+                          >
+                            🗑️ Eliminar
                           </button>
                         </div>
                       </td>

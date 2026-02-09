@@ -42,7 +42,7 @@ export default function SupervisionList() {
     let query = supabase
       .from("supervisiones")
       .select(
-        "id, correlativo, fecha, hora_inicio, hora_fin, estado, medico_jefe, ris:ris_id(nombre), establecimiento:establecimiento_id(nombre)",
+        "id, correlativo, fecha, hora_inicio, hora_fin, estado, medico_jefe, auditor_eliminado, auditor_nombre_eliminado, auditor:user_profiles!auditor_id(nombre), ris:ris_id(nombre), establecimiento:establecimiento_id(nombre)",
         { count: "exact" }
       )
       .order("fecha", { ascending: false })
@@ -83,6 +83,18 @@ export default function SupervisionList() {
       revisado: "bg-primary",
     };
     return map[estado] || "bg-secondary";
+  };
+
+  // Función para mostrar el nombre del auditor o "Auditor eliminado"
+  const mostrarAuditor = (supervision) => {
+    if (supervision.auditor_eliminado) {
+      return (
+        <span className="text-muted" style={{ fontStyle: "italic" }}>
+          Auditor eliminado ({supervision.auditor_nombre_eliminado || "Desconocido"})
+        </span>
+      );
+    }
+    return supervision.auditor?.nombre || "—";
   };
 
   const marcarRevisado = async (id) => {
@@ -207,6 +219,7 @@ export default function SupervisionList() {
                     <th>Fecha</th>
                     <th>Hora Inicio</th>
                     <th>Hora Fin</th>
+                    {isAdmin && <th>Auditor</th>}
                     <th>RIS</th>
                     <th>Establecimiento</th>
                     <th>Medico Jefe</th>
@@ -221,6 +234,7 @@ export default function SupervisionList() {
                       <td>{s.fecha ? new Date(s.fecha + "T00:00:00").toLocaleDateString() : "—"}</td>
                       <td>{s.hora_inicio ? new Date(s.hora_inicio).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</td>
                       <td>{s.hora_fin ? new Date(s.hora_fin).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+                      {isAdmin && <td>{mostrarAuditor(s)}</td>}
                       <td>{s.ris?.nombre || "—"}</td>
                       <td>{s.establecimiento?.nombre || "—"}</td>
                       <td>{s.medico_jefe || "—"}</td>
