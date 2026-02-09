@@ -688,46 +688,6 @@ export default function SupervisionForm() {
             placeholder="Detalle de lectura/validación en Drive..."
           />
         </div>
-
-        {/* Firma del Médico Jefe (aquí, como pediste) */}
-        <div className="mt-3">
-          <div className="fw-semibold mb-2">Firma del Médico Jefe</div>
-          <div className="firma-box">
-            {firmaMedicoJefeUrl ? (
-              <img
-                src={firmaMedicoJefeUrl}
-                alt="Firma Médico Jefe"
-                style={{ width: "100%", height: "100%", objectFit: "contain" }}
-              />
-            ) : (
-              <SignatureCanvas
-                ref={sigMedicoJefeRef}
-                penColor="black"
-                canvasProps={{ className: "firma-canvas" }}
-              />
-            )}
-          </div>
-
-          <div className="d-flex gap-2 mt-2 no-print">
-            <button className="btn btn-outline-secondary btn-sm" onClick={() => sigMedicoJefeRef.current?.clear()}>
-              Limpiar
-            </button>
-            <button className="btn btn-success btn-sm" disabled={saving} onClick={() => subirFirma("medico_jefe")}>
-              Guardar firma Médico Jefe
-            </button>
-            {firmaMedicoJefeUrl ? (
-              <button
-                className="btn btn-outline-danger btn-sm"
-                onClick={() => {
-                  setFirmaMedicoJefeUrl(null);
-                  setFirmaMedicoJefePath(null);
-                }}
-              >
-                Re-firmar
-              </button>
-            ) : null}
-          </div>
-        </div>
       </div>
 
       {/* ==================== EVIDENCIAS ==================== */}
@@ -781,40 +741,39 @@ export default function SupervisionForm() {
       {/* ==================== FIRMAS (AL FINAL) ==================== */}
       <div className="acta-box p-3 mb-4">
         <h5 className="m-0">Firmas</h5>
-        <div className="text-muted" style={{ fontSize: 13 }}>
-          (Supervisor y Digitador al final del acta)
-        </div>
 
         <hr className="my-3" />
 
         <div className="row g-3">
-          <div className="col-md-6">
-            <div className="fw-semibold mb-2">Firma Médico Supervisor</div>
+          {/* Médico Jefe */}
+          <div className="col-12 col-md-4">
+            <div className="fw-semibold mb-2">Firma Médico Jefe</div>
             <div className="firma-box">
-              {firmaSupervisorUrl ? (
+              {firmaMedicoJefeUrl ? (
                 <img
-                  src={firmaSupervisorUrl}
-                  alt="Firma Supervisor"
+                  src={firmaMedicoJefeUrl}
+                  alt="Firma Médico Jefe"
                   style={{ width: "100%", height: "100%", objectFit: "contain" }}
                 />
               ) : (
-                <SignatureCanvas ref={sigSupervisorRef} penColor="black" canvasProps={{ className: "firma-canvas" }} />
+                <SignatureCanvas
+                  ref={sigMedicoJefeRef}
+                  penColor="black"
+                  canvasProps={{ className: "firma-canvas" }}
+                />
               )}
             </div>
 
             <div className="d-flex gap-2 mt-2 no-print">
-              <button className="btn btn-outline-secondary btn-sm" onClick={() => sigSupervisorRef.current?.clear()}>
+              <button className="btn btn-outline-secondary btn-sm" onClick={() => sigMedicoJefeRef.current?.clear()}>
                 Limpiar
               </button>
-              <button className="btn btn-success btn-sm" disabled={saving} onClick={() => subirFirma("supervisor")}>
-                Guardar firma Supervisor
-              </button>
-              {firmaSupervisorUrl ? (
+              {firmaMedicoJefeUrl ? (
                 <button
                   className="btn btn-outline-danger btn-sm"
                   onClick={() => {
-                    setFirmaSupervisorUrl(null);
-                    setFirmaSupervisorPath(null);
+                    setFirmaMedicoJefeUrl(null);
+                    setFirmaMedicoJefePath(null);
                   }}
                 >
                   Re-firmar
@@ -823,7 +782,8 @@ export default function SupervisionForm() {
             </div>
           </div>
 
-          <div className="col-md-6">
+          {/* Digitador */}
+          <div className="col-12 col-md-4">
             <div className="fw-semibold mb-2">Firma Digitador</div>
             <div className="firma-box">
               {firmaDigitadorUrl ? (
@@ -841,15 +801,45 @@ export default function SupervisionForm() {
               <button className="btn btn-outline-secondary btn-sm" onClick={() => sigDigitadorRef.current?.clear()}>
                 Limpiar
               </button>
-              <button className="btn btn-success btn-sm" disabled={saving} onClick={() => subirFirma("digitador")}>
-                Guardar firma Digitador
-              </button>
               {firmaDigitadorUrl ? (
                 <button
                   className="btn btn-outline-danger btn-sm"
                   onClick={() => {
                     setFirmaDigitadorUrl(null);
                     setFirmaDigitadorPath(null);
+                  }}
+                >
+                  Re-firmar
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          {/* Auditor/Supervisor */}
+          <div className="col-12 col-md-4">
+            <div className="fw-semibold mb-2">Firma Auditor/Supervisor</div>
+            <div className="firma-box">
+              {firmaSupervisorUrl ? (
+                <img
+                  src={firmaSupervisorUrl}
+                  alt="Firma Auditor/Supervisor"
+                  style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                />
+              ) : (
+                <SignatureCanvas ref={sigSupervisorRef} penColor="black" canvasProps={{ className: "firma-canvas" }} />
+              )}
+            </div>
+
+            <div className="d-flex gap-2 mt-2 no-print">
+              <button className="btn btn-outline-secondary btn-sm" onClick={() => sigSupervisorRef.current?.clear()}>
+                Limpiar
+              </button>
+              {firmaSupervisorUrl ? (
+                <button
+                  className="btn btn-outline-danger btn-sm"
+                  onClick={() => {
+                    setFirmaSupervisorUrl(null);
+                    setFirmaSupervisorPath(null);
                   }}
                 >
                   Re-firmar
