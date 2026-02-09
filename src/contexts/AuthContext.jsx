@@ -3,11 +3,15 @@ import { supabase } from "../lib/supabaseClient";
 
 const AuthContext = createContext(null);
 
+// Tiempo de inactividad antes del logout automático (10 minutos)
+const INACTIVITY_TIMEOUT = 10 * 60 * 1000;
+
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const initialized = useRef(false);
+  const inactivityTimerRef = useRef(null);
 
   const fetchProfile = async (userId) => {
     try {
@@ -39,6 +43,27 @@ export function AuthProvider({ children }) {
     }
   };
 
+  // Detener el timer de inactividad
+  const stopInactivityTimer = () => {
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = null;
+    }
+  };
+
+  // Reiniciar el timer de inactividad
+  const resetInactivityTimer = () => {
+    stopInactivityTimer();
+    
+    // Solo iniciar el timer si hay una sesión activa
+    if (session?.user) {
+      inactivityTimerRef.current = setTimeout(() => {
+        console.log("AuthProvider: Timeout de inactividad - cerrando sesión");
+        signOut();
+      }, INACTIVITY_TIMEOUT);
+    }
+  };
+
   useEffect(() => {
     console.log("AuthProvider: Iniciando...");
     let isMount = true;
@@ -55,9 +80,13 @@ export function AuthProvider({ children }) {
         const p = await fetchProfile(s.user.id);
         console.log("AuthProvider: Perfil obtenido", p);
         setProfile(p);
+        // Iniciar el timer de inactividad cuando hay sesión activa
+        resetInactivityTimer();
       } else {
         console.log("AuthProvider: Sin usuario");
         setProfile(null);
+        // Detener el timer cuando no hay sesión
+        stopInactivityTimer();
       }
 
       console.log("AuthProvider: Carga completada");
@@ -67,10 +96,40 @@ export function AuthProvider({ children }) {
     return () => {
       isMount = false;
       subscription?.unsubscribe();
+      stopInactivityTimer();
     };
   }, []);
 
+  // Detectar actividad del usuario y reiniciar el timer
+  useEffect(() => {
+    // Solo agregar listeners si hay una sesión activa
+    if (!session?.user) return;
+
+    const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart', 'click'];
+    
+    const handleActivity = () => {
+      resetInactivityTimer();
+    };
+
+    // Agregar event listeners
+    events.forEach(event => {
+      window.addEventListener(event, handleActivity);
+    });
+
+    // Iniciar el timer al montar
+    resetInactivityTimer();
+
+    // Limpiar event listeners al desmontar
+    return () => {
+      events.forEach(event => {
+        window.removeEventListener(event, handleActivity);
+      });
+      stopInactivityTimer();
+    };
+  }, [session?.user]);
+
   const signOut = async () => {
+    stopInactivityTimer();
     await supabase.auth.signOut();
     setSession(null);
     setProfile(null);
