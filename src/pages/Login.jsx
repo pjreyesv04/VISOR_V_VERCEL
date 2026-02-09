@@ -68,7 +68,7 @@ export default function Login() {
             </div>
 
             <div className="mb-3">
-              <label className="form-label">Contrasena</label>
+              <label className="form-label">Contraseña</label>
               <input
                 type="password"
                 className="form-control"
