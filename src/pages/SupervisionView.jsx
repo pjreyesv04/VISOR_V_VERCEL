@@ -164,21 +164,21 @@ export default function SupervisionView() {
         </div>
       </div>
 
-      {/* Observaciones */}
+      {/* Observaciones y Recomendaciones */}
       <div className="card border-0 shadow-sm mb-3">
         <div className="card-body">
-          <h6>Observaciones</h6>
+          <h6>Observaciones y Recomendaciones</h6>
           <hr />
           <div className="mb-3">
-            <small className="text-muted">Observacion general</small>
+            <small className="text-muted">Observaciones</small>
             <div className="border rounded p-2 bg-light" style={{ minHeight: 60 }}>
               {supervision.observaciones || "Sin observaciones"}
             </div>
           </div>
           <div>
-            <small className="text-muted">Lectura de Drive</small>
+            <small className="text-muted">Recomendaciones</small>
             <div className="border rounded p-2 bg-light" style={{ minHeight: 60 }}>
-              {supervision.lectura_drive || "Sin registro"}
+              {supervision.recomendaciones || "Sin recomendaciones"}
             </div>
           </div>
         </div>

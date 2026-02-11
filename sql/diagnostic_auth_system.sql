@@ -9,16 +9,25 @@
 -- MODO: Solo lectura (no modifica datos)
 -- ====================================================================
 
-\echo '====================================================================';
-\echo '🔍 DIAGNÓSTICO DEL SISTEMA DE AUTENTICACIÓN';
-\echo '====================================================================';
-\echo '';
+DO $$ 
+BEGIN
+  RAISE NOTICE '';
+  RAISE NOTICE '====================================================================';
+  RAISE NOTICE '🔍 DIAGNÓSTICO DEL SISTEMA DE AUTENTICACIÓN';
+  RAISE NOTICE '====================================================================';
+  RAISE NOTICE '';
+END $$;
 
 -- ====================
 -- 1. VERIFICAR ESTADO DE RLS
 -- ====================
-\echo '1️⃣ ESTADO DE ROW LEVEL SECURITY (RLS)';
-\echo '────────────────────────────────────────';
+
+DO $$ 
+BEGIN
+  RAISE NOTICE '';
+  RAISE NOTICE '1️⃣ ESTADO DE ROW LEVEL SECURITY (RLS)';
+  RAISE NOTICE '────────────────────────────────────────';
+END $$;
 
 SELECT 
   schemaname AS "Schema",
@@ -31,13 +40,16 @@ FROM pg_tables
 WHERE tablename IN ('user_profiles', 'supervisiones', 'respuestas', 'evidencias', 'parametros')
 ORDER BY tablename;
 
-\echo '';
-
 -- ====================
 -- 2. POLÍTICAS RLS EN user_profiles
 -- ====================
-\echo '2️⃣ POLÍTICAS RLS EN user_profiles';
-\echo '────────────────────────────────────────';
+
+DO $$ 
+BEGIN
+  RAISE NOTICE '';
+  RAISE NOTICE '2️⃣ POLÍTICAS RLS EN user_profiles';
+  RAISE NOTICE '────────────────────────────────────────';
+END $$;
 
 SELECT 
   policyname AS "Nombre Política",
@@ -59,8 +71,6 @@ FROM pg_policies
 WHERE tablename = 'user_profiles'
 ORDER BY cmd, policyname;
 
-\echo '';
-
 -- Verificar si hay políticas suficientes
 DO $$
 DECLARE
@@ -79,13 +89,16 @@ BEGIN
   END IF;
 END $$;
 
-\echo '';
-
 -- ====================
 -- 3. USUARIOS Y PERFILES
 -- ====================
-\echo '3️⃣ ESTADO DE USUARIOS Y PERFILES';
-\echo '────────────────────────────────────────';
+
+DO $$ 
+BEGIN
+  RAISE NOTICE '';
+  RAISE NOTICE '3️⃣ ESTADO DE USUARIOS Y PERFILES';
+  RAISE NOTICE '────────────────────────────────────────';
+END $$;
 
 SELECT 
   u.email AS "📧 Email",
@@ -109,8 +122,6 @@ FROM auth.users u
 LEFT JOIN user_profiles up ON u.id = up.user_id
 ORDER BY u.created_at DESC;
 
-\echo '';
-
 -- Contar usuarios sin perfil
 DO $$
 DECLARE
@@ -128,13 +139,16 @@ BEGIN
   END IF;
 END $$;
 
-\echo '';
-
 -- ====================
 -- 4. DISTRIBUCIÓN DE ROLES
 -- ====================
-\echo '4️⃣ DISTRIBUCIÓN DE ROLES';
-\echo '────────────────────────────────────────';
+
+DO $$ 
+BEGIN
+  RAISE NOTICE '';
+  RAISE NOTICE '4️⃣ DISTRIBUCIÓN DE ROLES';
+  RAISE NOTICE '────────────────────────────────────────';
+END $$;
 
 SELECT 
   COALESCE(role, 'SIN ROL') AS "🎭 Rol",
@@ -143,8 +157,6 @@ SELECT
 FROM user_profiles
 GROUP BY role
 ORDER BY COUNT(*) DESC;
-
-\echo '';
 
 -- Verificar si hay al menos un admin
 DO $$
@@ -164,13 +176,16 @@ BEGIN
   END IF;
 END $$;
 
-\echo '';
-
 -- ====================
 -- 5. SUPERVISIONES POR USUARIO
 -- ====================
-\echo '5️⃣ SUPERVISIONES POR USUARIO';
-\echo '────────────────────────────────────────';
+
+DO $$ 
+BEGIN
+  RAISE NOTICE '';
+  RAISE NOTICE '5️⃣ SUPERVISIONES POR USUARIO';
+  RAISE NOTICE '────────────────────────────────────────';
+END $$;
 
 SELECT 
   COALESCE(up.nombre, '⚠️ Auditor eliminado') AS "👤 Auditor",
@@ -184,13 +199,16 @@ LEFT JOIN user_profiles up ON s.auditor_id = up.user_id
 GROUP BY up.nombre, up.role
 ORDER BY COUNT(s.id) DESC;
 
-\echo '';
-
 -- ====================
 -- 6. TRIGGER DE CREACIÓN DE PERFILES
 -- ====================
-\echo '6️⃣ TRIGGER handle_new_user';
-\echo '────────────────────────────────────────';
+
+DO $$ 
+BEGIN
+  RAISE NOTICE '';
+  RAISE NOTICE '6️⃣ TRIGGER handle_new_user';
+  RAISE NOTICE '────────────────────────────────────────';
+END $$;
 
 SELECT 
   tgname AS "Trigger",
@@ -198,8 +216,6 @@ SELECT
   pg_get_functiondef(tgfoid) AS "Función"
 FROM pg_trigger
 WHERE tgname = 'on_auth_user_created';
-
-\echo '';
 
 -- Verificar si existe la función
 DO $$
@@ -217,13 +233,16 @@ BEGIN
   END IF;
 END $$;
 
-\echo '';
-
 -- ====================
 -- 7. INTEGRIDAD DE DATOS
 -- ====================
-\echo '7️⃣ INTEGRIDAD DE DATOS';
-\echo '────────────────────────────────────────';
+
+DO $$ 
+BEGIN
+  RAISE NOTICE '';
+  RAISE NOTICE '7️⃣ INTEGRIDAD DE DATOS';
+  RAISE NOTICE '────────────────────────────────────────';
+END $$;
 
 -- Supervisiones sin auditor
 SELECT 
@@ -253,13 +272,16 @@ SELECT
 FROM evidencias e
 WHERE NOT EXISTS (SELECT 1 FROM supervisiones WHERE id = e.supervision_id);
 
-\echo '';
-
 -- ====================
 -- 8. PROBLEMAS DETECTADOS
 -- ====================
-\echo '8️⃣ RESUMEN DE PROBLEMAS DETECTADOS';
-\echo '────────────────────────────────────────';
+
+DO $$ 
+BEGIN
+  RAISE NOTICE '';
+  RAISE NOTICE '8️⃣ RESUMEN DE PROBLEMAS DETECTADOS';
+  RAISE NOTICE '────────────────────────────────────────';
+END $$;
 
 DO $$
 DECLARE
@@ -336,14 +358,17 @@ BEGIN
   RAISE NOTICE '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
 END $$;
 
-\echo '';
-\echo '====================================================================';
-\echo '✅ DIAGNÓSTICO COMPLETADO';
-\echo '====================================================================';
-\echo '';
-\echo '💡 TIPS:';
-\echo '  • Para ver más detalles de una tabla: SELECT * FROM user_profiles;';
-\echo '  • Para habilitar debug en frontend: localStorage.setItem("AUTH_DEBUG", "true")';
-\echo '  • Para solucionar problemas: ejecutar sql/fix_rls_definitivo.sql';
-\echo '  • Para documentación: ver TROUBLESHOOTING.md';
-\echo '';
+DO $$
+BEGIN
+  RAISE NOTICE '';
+  RAISE NOTICE '====================================================================';
+  RAISE NOTICE '✅ DIAGNÓSTICO COMPLETADO';
+  RAISE NOTICE '====================================================================';
+  RAISE NOTICE '';
+  RAISE NOTICE '💡 TIPS:';
+  RAISE NOTICE '  • Para ver más detalles de una tabla: SELECT * FROM user_profiles;';
+  RAISE NOTICE '  • Para habilitar debug en frontend: localStorage.setItem("AUTH_DEBUG", "true")';
+  RAISE NOTICE '  • Para solucionar problemas: ejecutar sql/fix_rls_definitivo.sql';
+  RAISE NOTICE '  • Para documentación: ver TROUBLESHOOTING.md';
+  RAISE NOTICE '';
+END $$;

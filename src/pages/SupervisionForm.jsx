@@ -19,49 +19,61 @@ async function dataURLToBlob(dataURL) {
   return await res.blob();
 }
 
+const GRUPOS_OCUPACIONALES = ["Médico", "Técnico", "Licenciado", "Tecnólogo"];
+
+const EMPTY_PARTICIPANTE = { apellidos_nombres: "", dni: "", grupo_ocupacional: "" };
+const EMPTY_FUA = { numero_fua: "", fecha_atencion: "", paciente: "", diagnostico: "", observacion: "" };
+const EMPTY_VERIF = { numero_fua: "", numero_hc: "", coincide: null, observacion: "" };
+
 export default function SupervisionForm() {
-  const { id } = useParams(); // /supervision/:id
+  const { id } = useParams();
   const supervisionId = id;
   const navigate = useNavigate();
-  const { user } = useAuth(); // Obtener usuario actual para auditoría
+  const { user } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const [sessionUser, setSessionUser] = useState(null);
 
-  // Cabecera (solo lectura en pantalla, se guarda en supervisiones)
+  // Cabecera
   const [correlativo, setCorrelativo] = useState(null);
   const [risNombre, setRisNombre] = useState("");
   const [establecimientoNombre, setEstablecimientoNombre] = useState("");
 
-  const [fechaTxt, setFechaTxt] = useState("");       // para imprimir bonito
-  const [horaInicioTxt, setHoraInicioTxt] = useState(""); // para imprimir bonito
-  const [horaFinTxt, setHoraFinTxt] = useState("");   // para imprimir bonito
+  const [fechaTxt, setFechaTxt] = useState("");
+  const [horaInicioTxt, setHoraInicioTxt] = useState("");
+  const [horaFinTxt, setHoraFinTxt] = useState("");
 
   const [medicoJefeNombre, setMedicoJefeNombre] = useState("");
   const [digitadorNombre, setDigitadorNombre] = useState("");
 
   // Observaciones globales
   const [observaciones, setObservaciones] = useState("");
-  const [lecturaDrive, setLecturaDrive] = useState("");
+  const [recomendaciones, setRecomendaciones] = useState("");
 
-  // Parámetros (dinámicos) -> SOLO SI/NO
+  // Parámetros dinámicos
   const [parametros, setParametros] = useState([]);
-  const [respuestas, setRespuestas] = useState({}); 
-  // respuestas[parametro_id] = { valor_bool: true/false/null, observacion: "" }
+  const [respuestas, setRespuestas] = useState({});
 
-  // Firmas (al final)
+  // Tablas extra
+  const [participantes, setParticipantes] = useState([{ ...EMPTY_PARTICIPANTE }]);
+  const [fuaVerificados, setFuaVerificados] = useState(
+    Array.from({ length: 10 }, () => ({ ...EMPTY_FUA }))
+  );
+  const [verificacionFuaHc, setVerificacionFuaHc] = useState(
+    Array.from({ length: 10 }, () => ({ ...EMPTY_VERIF }))
+  );
+
+  // Firmas
   const sigSupervisorRef = useRef(null);
   const sigDigitadorRef = useRef(null);
   const sigMedicoJefeRef = useRef(null);
 
-  // Firmas guardadas (paths)
   const [firmaSupervisorPath, setFirmaSupervisorPath] = useState(null);
   const [firmaDigitadorPath, setFirmaDigitadorPath] = useState(null);
   const [firmaMedicoJefePath, setFirmaMedicoJefePath] = useState(null);
 
-  // Firmas para mostrar (signed url)
   const [firmaSupervisorUrl, setFirmaSupervisorUrl] = useState(null);
   const [firmaDigitadorUrl, setFirmaDigitadorUrl] = useState(null);
   const [firmaMedicoJefeUrl, setFirmaMedicoJefeUrl] = useState(null);
@@ -79,6 +91,15 @@ export default function SupervisionForm() {
     return grouped;
   }, [parametros]);
 
+  // Mapa de código -> parámetro para dependencias
+  const codigoToParam = useMemo(() => {
+    const map = {};
+    (parametros || []).forEach((p) => {
+      if (p.codigo) map[p.codigo] = p;
+    });
+    return map;
+  }, [parametros]);
+
   const nowAsText = () => {
     const now = new Date();
     return {
@@ -88,10 +109,8 @@ export default function SupervisionForm() {
     };
   };
 
-  // Formatear fecha ISO a formato local DD/MM/YYYY evitando desfases de zona horaria
   const formatFechaISO = (isoString) => {
     if (!isoString) return "";
-    // Extraer solo la parte de fecha YYYY-MM-DD y forzar hora local
     const fechaSolo = isoString.split('T')[0];
     const date = new Date(fechaSolo + 'T00:00:00');
     const day = String(date.getDate()).padStart(2, "0");
@@ -102,13 +121,26 @@ export default function SupervisionForm() {
 
   const setResp = (paramId, patch) => {
     setRespuestas((prev) => {
-      const current = prev[paramId] || { valor_bool: null, observacion: "", valor_fecha: null, valor_cantidad: null, valor_texto: "" };
+      const current = prev[paramId] || { valor_bool: null, observacion: "", valor_fecha: null, valor_cantidad: null, valor_cantidad_2: null, valor_cantidad_3: null, valor_texto: "" };
       return { ...prev, [paramId]: { ...current, ...patch } };
     });
   };
 
+  // Verificar si un parámetro está desactivado por dependencia
+  const isDisabledByDependency = (p) => {
+    if (!p.depende_de_codigo) return false;
+    const parent = codigoToParam[p.depende_de_codigo];
+    if (!parent) return false;
+    const parentResp = respuestas[parent.id];
+    if (!parentResp || parentResp.valor_bool === null) return false;
+
+    // depende_valor = "no" significa: solo visible si el padre = No (valor_bool = false)
+    if (p.depende_valor === "no" && parentResp.valor_bool === true) return true;
+    if (p.depende_valor === "si" && parentResp.valor_bool === false) return true;
+    return false;
+  };
+
   const refreshFirmasSignedUrls = async (pSup, pDig, pJefe) => {
-    // bucket privado -> signed url
     const make = async (path) => {
       if (!path) return null;
       const { data, error } = await supabase.storage.from("firmas").createSignedUrl(path, 60 * 60);
@@ -150,7 +182,7 @@ export default function SupervisionForm() {
   };
 
   // =========================
-  // CARGA INICIAL + AUTO HORA INICIO ACTUAL
+  // CARGA INICIAL
   // =========================
   useEffect(() => {
     const init = async () => {
@@ -168,7 +200,7 @@ export default function SupervisionForm() {
       const { data: sup, error: supErr } = await supabase
         .from("supervisiones")
         .select(
-          "id,auditor_id,ris_id,establecimiento_id,correlativo,fecha,hora_inicio,hora_fin,medico_jefe,digitador,observaciones,lectura_drive,firma_url,firma_digitador_url,firma_medico_jefe_url"
+          "id,auditor_id,ris_id,establecimiento_id,correlativo,fecha,hora_inicio,hora_fin,medico_jefe,digitador,observaciones,recomendaciones,firma_url,firma_digitador_url,firma_medico_jefe_url"
         )
         .eq("id", supervisionId)
         .single();
@@ -179,7 +211,7 @@ export default function SupervisionForm() {
         return;
       }
 
-      // 2) Si NO hay hora_inicio, se asigna AHORA (automático)
+      // 2) Auto hora inicio
       let horaInicioISO = sup.hora_inicio;
       let fechaISO = sup.fecha;
 
@@ -194,29 +226,26 @@ export default function SupervisionForm() {
           .eq("id", supervisionId);
       }
 
-      // 3) Set textos para imprimir
       setFechaTxt(formatFechaISO(fechaISO || new Date().toISOString()));
       setHoraInicioTxt(new Date(horaInicioISO).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
 
       if (sup.hora_fin) {
         setHoraFinTxt(new Date(sup.hora_fin).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
       } else {
-        setHoraFinTxt(""); // todavía no finaliza
+        setHoraFinTxt("");
       }
 
       setCorrelativo(sup.correlativo ?? null);
-
       setMedicoJefeNombre(sup.medico_jefe || "");
       setDigitadorNombre(sup.digitador || "");
-
       setObservaciones(sup.observaciones || "");
-      setLecturaDrive(sup.lectura_drive || "");
+      setRecomendaciones(sup.recomendaciones || "");
 
       setFirmaSupervisorPath(sup.firma_url || null);
       setFirmaDigitadorPath(sup.firma_digitador_url || null);
       setFirmaMedicoJefePath(sup.firma_medico_jefe_url || null);
 
-      // 4) Correlativo por auditor (si no tiene)
+      // Correlativo
       if (sup.correlativo == null) {
         const { count } = await supabase
           .from("supervisiones")
@@ -228,7 +257,7 @@ export default function SupervisionForm() {
         await supabase.from("supervisiones").update({ correlativo: next }).eq("id", supervisionId);
       }
 
-      // 5) Nombre RIS / EESS
+      // RIS / EESS
       const { data: ris } = await supabase.from("ris").select("nombre").eq("id", sup.ris_id).single();
       setRisNombre(ris?.nombre || "");
 
@@ -239,20 +268,20 @@ export default function SupervisionForm() {
         .single();
       setEstablecimientoNombre(est?.nombre || "");
 
-      // 6) Parámetros
+      // Parámetros
       const { data: params, error: pErr } = await supabase
         .from("parametros")
-        .select("id,seccion,codigo,descripcion,requiere_observacion,orden,activo,tipo_campo_condicional,condicion_campo,etiqueta_campo_condicional")
+        .select("id,seccion,codigo,descripcion,requiere_observacion,orden,activo,tipo_campo_condicional,condicion_campo,etiqueta_campo_condicional,depende_de_codigo,depende_valor,has_tabla_extra")
         .order("seccion", { ascending: true })
         .order("orden", { ascending: true });
 
       if (pErr) toast.error("Error cargando parametros: " + pErr.message);
       setParametros(params || []);
 
-      // 7) Respuestas existentes
+      // Respuestas
       const { data: resp } = await supabase
         .from("respuestas")
-        .select("parametro_id,valor_bool,observacion,valor_fecha,valor_cantidad,valor_texto")
+        .select("parametro_id,valor_bool,observacion,valor_fecha,valor_cantidad,valor_cantidad_2,valor_cantidad_3,valor_texto")
         .eq("supervision_id", supervisionId);
 
       const map = {};
@@ -262,12 +291,64 @@ export default function SupervisionForm() {
           observacion: r.observacion ?? "",
           valor_fecha: r.valor_fecha ?? null,
           valor_cantidad: r.valor_cantidad ?? null,
+          valor_cantidad_2: r.valor_cantidad_2 ?? null,
+          valor_cantidad_3: r.valor_cantidad_3 ?? null,
           valor_texto: r.valor_texto ?? "",
         };
       });
       setRespuestas(map);
 
-      // 8) Evidencias + firmas (signed urls)
+      // Tablas extra: Participantes
+      const { data: partData } = await supabase
+        .from("participantes_capacitacion")
+        .select("*")
+        .eq("supervision_id", supervisionId)
+        .order("created_at", { ascending: true });
+
+      if (partData && partData.length > 0) {
+        setParticipantes(partData.map((p) => ({
+          id: p.id,
+          apellidos_nombres: p.apellidos_nombres || "",
+          dni: p.dni || "",
+          grupo_ocupacional: p.grupo_ocupacional || "",
+        })));
+      }
+
+      // Tablas extra: FUA verificados
+      const { data: fuaData } = await supabase
+        .from("fua_verificados")
+        .select("*")
+        .eq("supervision_id", supervisionId)
+        .order("fila_numero", { ascending: true });
+
+      if (fuaData && fuaData.length > 0) {
+        const fuaRows = Array.from({ length: 10 }, (_, i) => {
+          const existing = fuaData.find((f) => f.fila_numero === i + 1);
+          return existing
+            ? { id: existing.id, numero_fua: existing.numero_fua || "", fecha_atencion: existing.fecha_atencion || "", paciente: existing.paciente || "", diagnostico: existing.diagnostico || "", observacion: existing.observacion || "" }
+            : { ...EMPTY_FUA };
+        });
+        setFuaVerificados(fuaRows);
+      }
+
+      // Tablas extra: Verificación FUA vs HC
+      const { data: verifData } = await supabase
+        .from("verificacion_fua_hc")
+        .select("*")
+        .eq("supervision_id", supervisionId)
+        .order("fila_numero", { ascending: true });
+
+      if (verifData && verifData.length > 0) {
+        const verifRows = Array.from({ length: 10 }, (_, i) => {
+          const existing = verifData.find((f) => f.fila_numero === i + 1);
+          return existing
+            ? { id: existing.id, numero_fua: existing.numero_fua || "", numero_hc: existing.numero_hc || "", coincide: existing.coincide, observacion: existing.observacion || "" }
+            : { ...EMPTY_VERIF };
+        });
+        setVerificacionFuaHc(verifRows);
+      }
+
+      // Evidencias + firmas
       await refreshEvidencias();
       await refreshFirmasSignedUrls(sup.firma_url, sup.firma_digitador_url, sup.firma_medico_jefe_url);
 
@@ -279,10 +360,9 @@ export default function SupervisionForm() {
   }, [supervisionId]);
 
   // =========================
-  // SUBIR FIRMA (se guarda en supervisiones)
+  // SUBIR FIRMA
   // =========================
   const subirFirma = async (tipo) => {
-    // tipo: "supervisor" | "digitador" | "medico_jefe"
     const ref =
       tipo === "supervisor" ? sigSupervisorRef : tipo === "digitador" ? sigDigitadorRef : sigMedicoJefeRef;
 
@@ -377,10 +457,8 @@ export default function SupervisionForm() {
         return;
       }
 
-      // Mostrar toast de registro
       const toastId = toast.loading("Registrando cambios... Acción siendo auditada");
 
-      // Insertar registro de auditoría
       const { error } = await supabase.from("audit_logs").insert({
         supervision_id: supervisionId,
         user_id: user.id,
@@ -397,10 +475,7 @@ export default function SupervisionForm() {
         console.error("Error registrando auditoría:", error);
         toast.error("No fue posible registrar el cambio en auditoría", { id: toastId });
       } else {
-        toast.success(
-          "Cambios registrados y auditados exitosamente",
-          { id: toastId }
-        );
+        toast.success("Cambios registrados y auditados exitosamente", { id: toastId });
       }
     } catch (e) {
       console.error("Exception en registrarAuditoria:", e.message);
@@ -409,24 +484,23 @@ export default function SupervisionForm() {
   };
 
   // =========================
-  // GUARDAR TODO (finaliza: pone hora_fin = AHORA)
+  // GUARDAR TODO
   // =========================
   const guardarTodoFinalizar = async () => {
     try {
       setSaving(true);
 
-      // 1) Hora fin = AHORA
       const fin = nowAsText();
       setHoraFinTxt(fin.hora);
 
-      // 2) Guardar cabecera + observaciones + hora_fin
+      // Cabecera + observaciones
       const { error: supErr } = await supabase
         .from("supervisiones")
         .update({
           medico_jefe: medicoJefeNombre || null,
           digitador: digitadorNombre || null,
           observaciones: observaciones || null,
-          lectura_drive: lecturaDrive || null,
+          recomendaciones: recomendaciones || null,
           hora_fin: fin.iso,
           estado: "completado",
         })
@@ -434,7 +508,7 @@ export default function SupervisionForm() {
 
       if (supErr) throw supErr;
 
-      // 3) Guardar respuestas (si/no + campos condicionales + observación)
+      // Respuestas
       const rows = Object.entries(respuestas).map(([parametro_id, r]) => ({
         supervision_id: supervisionId,
         parametro_id,
@@ -442,6 +516,8 @@ export default function SupervisionForm() {
         observacion: r.observacion ?? null,
         valor_fecha: r.valor_fecha ?? null,
         valor_cantidad: r.valor_cantidad ?? null,
+        valor_cantidad_2: r.valor_cantidad_2 ?? null,
+        valor_cantidad_3: r.valor_cantidad_3 ?? null,
         valor_texto: r.valor_texto ?? null,
       }));
 
@@ -453,7 +529,61 @@ export default function SupervisionForm() {
         if (rErr) throw rErr;
       }
 
-      // 4) Registrar en auditoría
+      // Guardar participantes
+      await supabase.from("participantes_capacitacion").delete().eq("supervision_id", supervisionId);
+      const partRows = participantes
+        .filter((p) => p.apellidos_nombres.trim() || p.dni.trim())
+        .map((p) => ({
+          supervision_id: supervisionId,
+          apellidos_nombres: p.apellidos_nombres,
+          dni: p.dni,
+          grupo_ocupacional: p.grupo_ocupacional,
+        }));
+      if (partRows.length > 0) {
+        const { error: partErr } = await supabase.from("participantes_capacitacion").insert(partRows);
+        if (partErr) throw partErr;
+      }
+
+      // Guardar FUA verificados
+      await supabase.from("fua_verificados").delete().eq("supervision_id", supervisionId);
+      const fuaRows = fuaVerificados
+        .map((f, i) => ({ ...f, fila_numero: i + 1 }))
+        .filter((f) => f.numero_fua.trim() || f.paciente.trim());
+      if (fuaRows.length > 0) {
+        const { error: fuaErr } = await supabase.from("fua_verificados").insert(
+          fuaRows.map((f) => ({
+            supervision_id: supervisionId,
+            fila_numero: f.fila_numero,
+            numero_fua: f.numero_fua,
+            fecha_atencion: f.fecha_atencion || null,
+            paciente: f.paciente,
+            diagnostico: f.diagnostico,
+            observacion: f.observacion,
+          }))
+        );
+        if (fuaErr) throw fuaErr;
+      }
+
+      // Guardar verificación FUA vs HC
+      await supabase.from("verificacion_fua_hc").delete().eq("supervision_id", supervisionId);
+      const verifRows = verificacionFuaHc
+        .map((v, i) => ({ ...v, fila_numero: i + 1 }))
+        .filter((v) => v.numero_fua.trim() || v.numero_hc.trim());
+      if (verifRows.length > 0) {
+        const { error: verifErr } = await supabase.from("verificacion_fua_hc").insert(
+          verifRows.map((v) => ({
+            supervision_id: supervisionId,
+            fila_numero: v.fila_numero,
+            numero_fua: v.numero_fua,
+            numero_hc: v.numero_hc,
+            coincide: v.coincide,
+            observacion: v.observacion,
+          }))
+        );
+        if (verifErr) throw verifErr;
+      }
+
+      // Auditoría
       await registrarAuditoria("update", "Acta de supervisión finalizada y guardada", {
         field: "estado",
         oldValue: "borrador",
@@ -468,12 +598,236 @@ export default function SupervisionForm() {
     }
   };
 
+  const limpiarFormulario = () => {
+    if (!window.confirm("¿Está seguro de limpiar todo el formulario? Se perderán los datos no guardados.")) return;
+
+    setMedicoJefeNombre("");
+    setDigitadorNombre("");
+    setObservaciones("");
+    setRecomendaciones("");
+
+    const respVacias = {};
+    Object.keys(respuestas).forEach((paramId) => {
+      respVacias[paramId] = { valor_bool: null, observacion: "", valor_fecha: null, valor_cantidad: null, valor_cantidad_2: null, valor_cantidad_3: null, valor_texto: "" };
+    });
+    setRespuestas(respVacias);
+
+    setParticipantes([{ ...EMPTY_PARTICIPANTE }]);
+    setFuaVerificados(Array.from({ length: 10 }, () => ({ ...EMPTY_FUA })));
+    setVerificacionFuaHc(Array.from({ length: 10 }, () => ({ ...EMPTY_VERIF })));
+
+    sigSupervisorRef.current?.clear();
+    sigDigitadorRef.current?.clear();
+    sigMedicoJefeRef.current?.clear();
+
+    toast.success("Formulario limpiado");
+  };
+
   const imprimir = () => window.print();
 
-  const renderParametroSiNo = (p) => {
-    const r = respuestas[p.id] || { valor_bool: null, observacion: "", valor_fecha: null, valor_cantidad: null, valor_texto: "" };
+  // =========================
+  // HELPERS PARA TABLAS DINÁMICAS
+  // =========================
+  const updateParticipante = (index, field, value) => {
+    setParticipantes((prev) => {
+      const copy = [...prev];
+      copy[index] = { ...copy[index], [field]: value };
+      return copy;
+    });
+  };
 
-    // Determinar si el campo condicional debe ser visible
+  const addParticipante = () => {
+    setParticipantes((prev) => [...prev, { ...EMPTY_PARTICIPANTE }]);
+  };
+
+  const removeParticipante = (index) => {
+    setParticipantes((prev) => prev.length > 1 ? prev.filter((_, i) => i !== index) : prev);
+  };
+
+  const updateFua = (index, field, value) => {
+    setFuaVerificados((prev) => {
+      const copy = [...prev];
+      copy[index] = { ...copy[index], [field]: value };
+      return copy;
+    });
+  };
+
+  const updateVerif = (index, field, value) => {
+    setVerificacionFuaHc((prev) => {
+      const copy = [...prev];
+      copy[index] = { ...copy[index], [field]: value };
+      return copy;
+    });
+  };
+
+  // =========================
+  // RENDER: Tabla de Participantes (Sección 1.1)
+  // =========================
+  const renderTablaParticipantes = () => (
+    <div className="mt-3">
+      <label className="form-label fw-semibold text-primary">Participantes de la capacitación</label>
+      <div className="table-responsive">
+        <table className="table table-bordered table-sm">
+          <thead className="table-light">
+            <tr>
+              <th style={{ width: 40 }}>#</th>
+              <th>Apellidos y Nombres</th>
+              <th style={{ width: 140 }}>N° DNI</th>
+              <th style={{ width: 160 }}>Grupo Ocupacional</th>
+              <th style={{ width: 50 }} className="no-print"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {participantes.map((p, i) => (
+              <tr key={i}>
+                <td className="text-center align-middle">{i + 1}</td>
+                <td>
+                  <input
+                    className="form-control form-control-sm"
+                    value={p.apellidos_nombres}
+                    onChange={(e) => updateParticipante(i, "apellidos_nombres", e.target.value)}
+                    placeholder="Apellidos y nombres"
+                  />
+                </td>
+                <td>
+                  <input
+                    className="form-control form-control-sm"
+                    value={p.dni}
+                    onChange={(e) => updateParticipante(i, "dni", e.target.value)}
+                    placeholder="DNI"
+                    maxLength={8}
+                  />
+                </td>
+                <td>
+                  <select
+                    className="form-select form-select-sm"
+                    value={p.grupo_ocupacional}
+                    onChange={(e) => updateParticipante(i, "grupo_ocupacional", e.target.value)}
+                  >
+                    <option value="">Seleccionar...</option>
+                    {GRUPOS_OCUPACIONALES.map((g) => (
+                      <option key={g} value={g}>{g}</option>
+                    ))}
+                  </select>
+                </td>
+                <td className="text-center no-print">
+                  <button
+                    className="btn btn-outline-danger btn-sm"
+                    onClick={() => removeParticipante(i)}
+                    title="Eliminar fila"
+                  >
+                    &times;
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <button className="btn btn-outline-primary btn-sm no-print" onClick={addParticipante}>
+        + Agregar participante
+      </button>
+    </div>
+  );
+
+  // =========================
+  // RENDER: Tabla FUA Verificados (Sección 6)
+  // =========================
+  const renderTablaFuaVerificados = () => (
+    <div className="mt-3 mb-3">
+      <label className="form-label fw-semibold text-primary">FUA Verificados (10 filas)</label>
+      <div className="table-responsive">
+        <table className="table table-bordered table-sm">
+          <thead className="table-light">
+            <tr>
+              <th style={{ width: 40 }}>#</th>
+              <th>N° FUA</th>
+              <th style={{ width: 140 }}>Fecha Atención</th>
+              <th>Paciente</th>
+              <th>Diagnóstico</th>
+              <th>Observación</th>
+            </tr>
+          </thead>
+          <tbody>
+            {fuaVerificados.map((f, i) => (
+              <tr key={i}>
+                <td className="text-center align-middle">{i + 1}</td>
+                <td>
+                  <input className="form-control form-control-sm" value={f.numero_fua} onChange={(e) => updateFua(i, "numero_fua", e.target.value)} placeholder="N° FUA" />
+                </td>
+                <td>
+                  <input type="date" className="form-control form-control-sm" value={f.fecha_atencion} onChange={(e) => updateFua(i, "fecha_atencion", e.target.value)} />
+                </td>
+                <td>
+                  <input className="form-control form-control-sm" value={f.paciente} onChange={(e) => updateFua(i, "paciente", e.target.value)} placeholder="Nombre paciente" />
+                </td>
+                <td>
+                  <input className="form-control form-control-sm" value={f.diagnostico} onChange={(e) => updateFua(i, "diagnostico", e.target.value)} placeholder="Diagnóstico" />
+                </td>
+                <td>
+                  <input className="form-control form-control-sm" value={f.observacion} onChange={(e) => updateFua(i, "observacion", e.target.value)} placeholder="Obs." />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  // =========================
+  // RENDER: Tabla Verificación FUA vs HC (Sección 7.1)
+  // =========================
+  const renderTablaVerificacionFuaHc = () => (
+    <div className="mt-3 mb-3">
+      <label className="form-label fw-semibold text-primary">Verificación FUA vs Historia Clínica</label>
+      <div className="table-responsive">
+        <table className="table table-bordered table-sm">
+          <thead className="table-light">
+            <tr>
+              <th style={{ width: 40 }}>#</th>
+              <th>N° FUA</th>
+              <th>N° Historia Clínica</th>
+              <th style={{ width: 120 }}>¿Coincide?</th>
+              <th>Observación</th>
+            </tr>
+          </thead>
+          <tbody>
+            {verificacionFuaHc.map((v, i) => (
+              <tr key={i}>
+                <td className="text-center align-middle">{i + 1}</td>
+                <td>
+                  <input className="form-control form-control-sm" value={v.numero_fua} onChange={(e) => updateVerif(i, "numero_fua", e.target.value)} placeholder="N° FUA" />
+                </td>
+                <td>
+                  <input className="form-control form-control-sm" value={v.numero_hc} onChange={(e) => updateVerif(i, "numero_hc", e.target.value)} placeholder="N° HC" />
+                </td>
+                <td>
+                  <select className="form-select form-select-sm" value={v.coincide === null ? "" : v.coincide ? "si" : "no"} onChange={(e) => updateVerif(i, "coincide", e.target.value === "" ? null : e.target.value === "si")}>
+                    <option value="">—</option>
+                    <option value="si">Sí</option>
+                    <option value="no">No</option>
+                  </select>
+                </td>
+                <td>
+                  <input className="form-control form-control-sm" value={v.observacion} onChange={(e) => updateVerif(i, "observacion", e.target.value)} placeholder="Obs." />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  // =========================
+  // RENDER: Parámetro individual
+  // =========================
+  const renderParametroSiNo = (p) => {
+    const r = respuestas[p.id] || { valor_bool: null, observacion: "", valor_fecha: null, valor_cantidad: null, valor_cantidad_2: null, valor_cantidad_3: null, valor_texto: "" };
+
+    const disabled = isDisabledByDependency(p);
+
     const mostrarCampoCondicional = () => {
       if (!p.tipo_campo_condicional) return false;
       if (p.condicion_campo === "siempre") return true;
@@ -482,105 +836,217 @@ export default function SupervisionForm() {
       return false;
     };
 
-    const showConditional = mostrarCampoCondicional();
+    const showConditional = !disabled && mostrarCampoCondicional();
+
+    // Para cantidad_multiple, parsear las etiquetas separadas por |
+    const cantidadLabels = p.tipo_campo_condicional === "cantidad_multiple" && p.etiqueta_campo_condicional
+      ? p.etiqueta_campo_condicional.split("|")
+      : [];
+
+    // Para texto_persona, parsear las etiquetas
+    const textoPersonaLabels = p.tipo_campo_condicional === "texto_persona" && p.etiqueta_campo_condicional
+      ? p.etiqueta_campo_condicional.split("|")
+      : [];
+
+    // Mostrar tabla participantes si 1.1 = Sí
+    const showTablaParticipantes = p.has_tabla_extra === "participantes" && r.valor_bool === true;
+
+    // Mostrar tabla FUA verificados en la sección 6
+    const showTablaFua = p.has_tabla_extra === "fua_verificados";
+
+    // Mostrar tabla verificación FUA vs HC en sección 7
+    const showTablaVerif = p.has_tabla_extra === "verificacion_fua_hc";
 
     return (
-      <div className="mb-3" key={p.id}>
+      <div className={`mb-3 ${disabled ? "opacity-50" : ""}`} key={p.id}>
         <div className="fw-semibold">
           {p.codigo ? `${p.codigo}. ` : ""}
           {p.descripcion}
+          {disabled && <span className="badge bg-secondary ms-2" style={{ fontSize: 10 }}>Desactivado (ver {p.depende_de_codigo})</span>}
         </div>
 
-        <div className="d-flex gap-4 mt-2">
-          <label className="form-check">
-            <input
-              className="form-check-input"
-              type="radio"
-              name={`si_no_${p.id}`}
-              checked={r.valor_bool === true}
-              onChange={() => setResp(p.id, { valor_bool: true })}
-            />
-            <span className="form-check-label">Sí</span>
-          </label>
+        {!disabled && (
+          <>
+            <div className="d-flex gap-4 mt-2">
+              <label className="form-check">
+                <input
+                  className="form-check-input"
+                  type="radio"
+                  name={`si_no_${p.id}`}
+                  checked={r.valor_bool === true}
+                  onChange={() => setResp(p.id, { valor_bool: true })}
+                />
+                <span className="form-check-label">Sí</span>
+              </label>
 
-          <label className="form-check">
-            <input
-              className="form-check-input"
-              type="radio"
-              name={`si_no_${p.id}`}
-              checked={r.valor_bool === false}
-              onChange={() => setResp(p.id, { valor_bool: false })}
-            />
-            <span className="form-check-label">No</span>
-          </label>
-        </div>
+              <label className="form-check">
+                <input
+                  className="form-check-input"
+                  type="radio"
+                  name={`si_no_${p.id}`}
+                  checked={r.valor_bool === false}
+                  onChange={() => setResp(p.id, { valor_bool: false })}
+                />
+                <span className="form-check-label">No</span>
+              </label>
+            </div>
 
-        {/* Campo condicional: Fecha */}
-        {showConditional && p.tipo_campo_condicional === "fecha" && (
-          <div className="mt-2">
-            <label className="form-label text-primary fw-semibold">
-              {p.etiqueta_campo_condicional || "Fecha"}
-            </label>
-            <input
-              type="date"
-              className="form-control"
-              style={{ maxWidth: 250 }}
-              value={r.valor_fecha || ""}
-              onChange={(e) => setResp(p.id, { valor_fecha: e.target.value || null })}
-            />
-          </div>
+            {/* Campo condicional: Fecha */}
+            {showConditional && p.tipo_campo_condicional === "fecha" && (
+              <div className="mt-2">
+                <label className="form-label text-primary fw-semibold">
+                  {p.etiqueta_campo_condicional || "Fecha"}
+                </label>
+                <input
+                  type="date"
+                  className="form-control"
+                  style={{ maxWidth: 250 }}
+                  value={r.valor_fecha || ""}
+                  onChange={(e) => setResp(p.id, { valor_fecha: e.target.value || null })}
+                />
+              </div>
+            )}
+
+            {/* Campo condicional: Cantidad simple */}
+            {showConditional && p.tipo_campo_condicional === "cantidad" && (
+              <div className="mt-2">
+                <label className="form-label text-primary fw-semibold">
+                  {p.etiqueta_campo_condicional || "Cantidad"}
+                </label>
+                <input
+                  type="number"
+                  className="form-control"
+                  style={{ maxWidth: 200 }}
+                  min={0}
+                  value={r.valor_cantidad ?? ""}
+                  onChange={(e) =>
+                    setResp(p.id, {
+                      valor_cantidad: e.target.value === "" ? null : parseInt(e.target.value, 10),
+                    })
+                  }
+                />
+              </div>
+            )}
+
+            {/* Campo condicional: Cantidad múltiple (3 campos separados) */}
+            {showConditional && p.tipo_campo_condicional === "cantidad_multiple" && (
+              <div className="mt-2">
+                <div className="row g-2">
+                  <div className="col-md-4">
+                    <label className="form-label text-primary fw-semibold" style={{ fontSize: 13 }}>
+                      {cantidadLabels[0] || "Cantidad 1"}
+                    </label>
+                    <input
+                      type="number"
+                      className="form-control form-control-sm"
+                      min={0}
+                      value={r.valor_cantidad ?? ""}
+                      onChange={(e) => setResp(p.id, { valor_cantidad: e.target.value === "" ? null : parseInt(e.target.value, 10) })}
+                    />
+                  </div>
+                  <div className="col-md-4">
+                    <label className="form-label text-primary fw-semibold" style={{ fontSize: 13 }}>
+                      {cantidadLabels[1] || "Cantidad 2"}
+                    </label>
+                    <input
+                      type="number"
+                      className="form-control form-control-sm"
+                      min={0}
+                      value={r.valor_cantidad_2 ?? ""}
+                      onChange={(e) => setResp(p.id, { valor_cantidad_2: e.target.value === "" ? null : parseInt(e.target.value, 10) })}
+                    />
+                  </div>
+                  <div className="col-md-4">
+                    <label className="form-label text-primary fw-semibold" style={{ fontSize: 13 }}>
+                      {cantidadLabels[2] || "Cantidad 3"}
+                    </label>
+                    <input
+                      type="number"
+                      className="form-control form-control-sm"
+                      min={0}
+                      value={r.valor_cantidad_3 ?? ""}
+                      onChange={(e) => setResp(p.id, { valor_cantidad_3: e.target.value === "" ? null : parseInt(e.target.value, 10) })}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Campo condicional: Texto / Nombre */}
+            {showConditional && p.tipo_campo_condicional === "texto" && (
+              <div className="mt-2">
+                <label className="form-label text-primary fw-semibold">
+                  {p.etiqueta_campo_condicional || "Texto"}
+                </label>
+                <input
+                  type="text"
+                  className="form-control"
+                  value={r.valor_texto || ""}
+                  onChange={(e) => setResp(p.id, { valor_texto: e.target.value })}
+                  placeholder="Ingrese..."
+                />
+              </div>
+            )}
+
+            {/* Campo condicional: Texto persona (nombre + grupo ocupacional) */}
+            {showConditional && p.tipo_campo_condicional === "texto_persona" && (
+              <div className="mt-2">
+                <div className="row g-2">
+                  <div className="col-md-6">
+                    <label className="form-label text-primary fw-semibold" style={{ fontSize: 13 }}>
+                      {textoPersonaLabels[0] || "Nombres y Apellidos"}
+                    </label>
+                    <input
+                      type="text"
+                      className="form-control form-control-sm"
+                      value={r.valor_texto || ""}
+                      onChange={(e) => setResp(p.id, { valor_texto: e.target.value })}
+                      placeholder="Apellidos y nombres"
+                    />
+                  </div>
+                  <div className="col-md-6">
+                    <label className="form-label text-primary fw-semibold" style={{ fontSize: 13 }}>
+                      {textoPersonaLabels[1] || "Grupo Ocupacional"}
+                    </label>
+                    <select
+                      className="form-select form-select-sm"
+                      value={r.valor_fecha || ""}
+                      onChange={(e) => setResp(p.id, { valor_fecha: e.target.value || null })}
+                    >
+                      <option value="">Seleccionar...</option>
+                      {GRUPOS_OCUPACIONALES.map((g) => (
+                        <option key={g} value={g}>{g}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Tabla de participantes (1.1) */}
+            {showTablaParticipantes && renderTablaParticipantes()}
+
+            {/* Tabla FUA verificados (6.1) */}
+            {showTablaFua && renderTablaFuaVerificados()}
+
+            {/* Tabla verificación FUA vs HC (7.1) */}
+            {showTablaVerif && renderTablaVerificacionFuaHc()}
+
+            {/* Observación por ítem */}
+            {p.requiere_observacion ? (
+              <div className="mt-2">
+                <label className="form-label">Observación</label>
+                <textarea
+                  className="form-control"
+                  rows={2}
+                  value={r.observacion || ""}
+                  onChange={(e) => setResp(p.id, { observacion: e.target.value })}
+                  placeholder="Detalle / sustento..."
+                />
+              </div>
+            ) : null}
+          </>
         )}
-
-        {/* Campo condicional: Cantidad */}
-        {showConditional && p.tipo_campo_condicional === "cantidad" && (
-          <div className="mt-2">
-            <label className="form-label text-primary fw-semibold">
-              {p.etiqueta_campo_condicional || "Cantidad"}
-            </label>
-            <input
-              type="number"
-              className="form-control"
-              style={{ maxWidth: 200 }}
-              min={0}
-              value={r.valor_cantidad ?? ""}
-              onChange={(e) =>
-                setResp(p.id, {
-                  valor_cantidad: e.target.value === "" ? null : parseInt(e.target.value, 10),
-                })
-              }
-            />
-          </div>
-        )}
-
-        {/* Campo condicional: Texto / Nombre */}
-        {showConditional && p.tipo_campo_condicional === "texto" && (
-          <div className="mt-2">
-            <label className="form-label text-primary fw-semibold">
-              {p.etiqueta_campo_condicional || "Texto"}
-            </label>
-            <input
-              type="text"
-              className="form-control"
-              value={r.valor_texto || ""}
-              onChange={(e) => setResp(p.id, { valor_texto: e.target.value })}
-              placeholder="Ingrese..."
-            />
-          </div>
-        )}
-
-        {/* Observación por ítem */}
-        {p.requiere_observacion ? (
-          <div className="mt-2">
-            <label className="form-label">Observación</label>
-            <textarea
-              className="form-control"
-              rows={2}
-              value={r.observacion || ""}
-              onChange={(e) => setResp(p.id, { observacion: e.target.value })}
-              placeholder="Detalle / sustento..."
-            />
-          </div>
-        ) : null}
       </div>
     );
   };
@@ -595,7 +1061,7 @@ export default function SupervisionForm() {
 
   return (
     <div className="container my-4">
-      {/* ==================== CABECERA (IMPRIMIBLE) ==================== */}
+      {/* ==================== CABECERA ==================== */}
       <div className="acta-box p-3 mb-4">
         <div className="d-flex justify-content-between align-items-start flex-wrap gap-3">
           <div>
@@ -641,7 +1107,7 @@ export default function SupervisionForm() {
         </div>
       </div>
 
-      {/* ==================== SECCIONES DINÁMICAS (SOLO SI/NO) ==================== */}
+      {/* ==================== SECCIONES DINÁMICAS ==================== */}
       <div className="acta-box p-3 mb-4">
         <h5 className="m-0">Evaluación</h5>
         <hr className="my-3" />
@@ -660,17 +1126,14 @@ export default function SupervisionForm() {
         )}
       </div>
 
-      {/* ==================== OBSERVACIONES + LECTURA DRIVE ==================== */}
+      {/* ==================== OBSERVACIONES Y RECOMENDACIONES ==================== */}
       <div className="acta-box p-3 mb-4">
-        <h5 className="m-0">Observaciones</h5>
-        <div className="text-muted" style={{ fontSize: 13 }}>
-          (Incluye “Lectura de Drive” como textarea)
-        </div>
+        <h5 className="m-0">Observaciones y Recomendaciones</h5>
 
         <hr className="my-3" />
 
         <div className="mb-3">
-          <label className="form-label fw-semibold">Observación general</label>
+          <label className="form-label fw-semibold">Observaciones</label>
           <textarea
             className="form-control"
             rows={5}
@@ -681,13 +1144,13 @@ export default function SupervisionForm() {
         </div>
 
         <div className="mb-3">
-          <label className="form-label fw-semibold">Lectura de Drive</label>
+          <label className="form-label fw-semibold">Recomendaciones</label>
           <textarea
             className="form-control"
             rows={4}
-            value={lecturaDrive}
-            onChange={(e) => setLecturaDrive(e.target.value)}
-            placeholder="Detalle de lectura/validación en Drive..."
+            value={recomendaciones}
+            onChange={(e) => setRecomendaciones(e.target.value)}
+            placeholder="Escriba recomendaciones..."
           />
         </div>
       </div>
@@ -740,7 +1203,7 @@ export default function SupervisionForm() {
         )}
       </div>
 
-      {/* ==================== FIRMAS (AL FINAL) ==================== */}
+      {/* ==================== FIRMAS ==================== */}
       <div className="acta-box p-3 mb-4">
         <h5 className="m-0">Firmas</h5>
 
@@ -859,6 +1322,9 @@ export default function SupervisionForm() {
         </button>
         <button className="btn btn-primary" disabled={saving} onClick={guardarTodoFinalizar}>
           {saving ? "Guardando..." : "Guardar"}
+        </button>
+        <button className="btn btn-outline-danger" onClick={limpiarFormulario}>
+          Limpiar
         </button>
         <button className="btn btn-outline-dark" onClick={imprimir}>
           Exportar / Imprimir (PDF)

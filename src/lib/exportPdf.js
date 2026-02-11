@@ -67,13 +67,21 @@ export function exportSupervisionPdf(supervision, respuestas, parametros, risNom
     },
   });
 
-  // Observaciones
+  // Observaciones y Recomendaciones
   const finalY = doc.lastAutoTable.finalY + 10;
-  if (finalY < 260) {
+  if (finalY < 240) {
     doc.setFontSize(9);
     doc.text("Observaciones:", 14, finalY);
     doc.setFontSize(8);
     doc.text(supervision.observaciones || "Sin observaciones", 14, finalY + 5, { maxWidth: 180 });
+
+    const recomY = finalY + 20;
+    if (recomY < 260) {
+      doc.setFontSize(9);
+      doc.text("Recomendaciones:", 14, recomY);
+      doc.setFontSize(8);
+      doc.text(supervision.recomendaciones || "Sin recomendaciones", 14, recomY + 5, { maxWidth: 180 });
+    }
   }
 
   doc.save(`supervision_${supervision.correlativo || supervision.id}.pdf`);

@@ -15,6 +15,7 @@ export function exportSupervisionesToExcel(supervisiones, respuestasMap, paramet
     "Hora Inicio": s.hora_inicio ? new Date(s.hora_inicio).toLocaleTimeString() : "",
     "Hora Fin": s.hora_fin ? new Date(s.hora_fin).toLocaleTimeString() : "",
     Observaciones: s.observaciones || "",
+    Recomendaciones: s.recomendaciones || "",
   }));
 
   const ws1 = XLSX.utils.json_to_sheet(supRows);
