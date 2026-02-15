@@ -21,6 +21,7 @@ export function AuthProvider({ children }) {
   const [authError, setAuthError] = useState(null);
   const inactivityTimerRef = useRef(null);
   const isSigningOut = useRef(false);
+  const isLoadingProfile = useRef(false); // Evitar doble fetch simultáneo
 
   // ─── Cache de perfil ───
   const cacheProfile = (userId, profileData) => {
@@ -175,8 +176,16 @@ export function AuthProvider({ children }) {
 
           setSession(s);
 
+          // Evitar doble fetch si ya hay uno en curso
+          if (isLoadingProfile.current) {
+            logger.info("Perfil ya se está cargando, ignorando evento duplicado");
+            break;
+          }
+
           // Cargar perfil
+          isLoadingProfile.current = true;
           const p = await fetchProfile(s.user.id);
+          isLoadingProfile.current = false;
           if (!isMount) return;
 
           if (!p) {

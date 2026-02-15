@@ -14,35 +14,52 @@ export default function Login() {
     setErr("");
     setLoading(true);
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password: pass,
-    });
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password: pass,
+      });
 
-    if (error) {
+      if (error) {
+        setLoading(false);
+        return setErr(error.message);
+      }
+
+      // Verificar si la cuenta esta activa (con timeout de 8s)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      const { data: profile, error: profErr } = await supabase
+        .from("user_profiles")
+        .select("activo")
+        .eq("user_id", data.user.id)
+        .single()
+        .abortSignal(controller.signal);
+
+      clearTimeout(timeoutId);
+
+      if (profErr || !profile) {
+        setLoading(false);
+        console.error("Error al verificar perfil:", profErr);
+        return setErr("No se encontro el perfil de usuario. Contacte al administrador.");
+      }
+
+      if (!profile.activo) {
+        await supabase.auth.signOut();
+        setLoading(false);
+        return setErr("Tu cuenta ha sido desactivada. Contacta al administrador.");
+      }
+
+      nav("/");
+    } catch (e) {
       setLoading(false);
-      return setErr(error.message);
+      if (e.name === 'AbortError') {
+        console.error("Timeout al verificar perfil de usuario");
+        return setErr("Tiempo de espera agotado. Intente nuevamente.");
+      }
+      console.error("Error en login:", e);
+      return setErr("Error inesperado. Intente nuevamente.");
     }
-
-    // Verificar si la cuenta esta activa
-    const { data: profile, error: profErr } = await supabase
-      .from("user_profiles")
-      .select("activo")
-      .eq("user_id", data.user.id)
-      .single();
-
-    if (profErr || !profile) {
-      setLoading(false);
-      return setErr("No se encontro el perfil de usuario.");
-    }
-
-    if (!profile.activo) {
-      await supabase.auth.signOut();
-      setLoading(false);
-      return setErr("Tu cuenta ha sido desactivada. Contacta al administrador.");
-    }
-
-    nav("/");
   };
 
   return (
