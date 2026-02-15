@@ -19,7 +19,7 @@ const menuItems = [
     section: "Principal",
     items: [
       { to: "/", icon: BiHomeAlt, label: "Dashboard", roles: ["admin", "auditor", "viewer", "supervisor_informatico"] },
-      { to: "/nueva", icon: BiPlusCircle, label: "Nueva Supervisión Médica", roles: ["admin", "auditor"] },
+      { to: "/nueva-supervision", icon: BiPlusCircle, label: "Nueva Supervisión Médica", roles: ["admin", "auditor"] },
       { to: "/supervisiones", icon: BiListUl, label: "Supervisiones Médicas", roles: ["admin", "auditor", "viewer"] },
       { to: "/reportes", icon: BiBarChartAlt2, label: "Reportes", roles: ["admin", "viewer"] },
     ],
@@ -27,7 +27,7 @@ const menuItems = [
   {
     section: "Supervisión Informática",
     items: [
-      { to: "/nueva-informatica", icon: BiAddToQueue, label: "Nueva Supervisión IT", roles: ["admin", "supervisor_informatico"] },
+      { to: "/nueva-supervision-informatica", icon: BiAddToQueue, label: "Nueva Supervisión IT", roles: ["admin", "supervisor_informatico"] },
       { to: "/supervisiones-informatica", icon: BiDesktop, label: "Supervisiones IT", roles: ["admin", "supervisor_informatico", "viewer"] },
     ],
   },

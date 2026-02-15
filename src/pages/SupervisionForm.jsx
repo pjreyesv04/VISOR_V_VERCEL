@@ -318,10 +318,11 @@ export default function SupervisionForm() {
         if (dig) setDigitadorNombre(dig.apellidos_nombres);
       }
 
-      // Parámetros
+      // Parámetros (solo de Supervisión General)
       const { data: params, error: pErr } = await supabase
         .from("parametros")
         .select("id,seccion,codigo,descripcion,requiere_observacion,orden,activo,tipo_campo_condicional,condicion_campo,etiqueta_campo_condicional,depende_de_codigo,depende_valor,has_tabla_extra")
+        .eq("tipo_supervision", "general")
         .order("seccion", { ascending: true })
         .order("orden", { ascending: true });
 

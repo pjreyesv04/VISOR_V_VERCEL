@@ -21,6 +21,9 @@ export default function Dashboard() {
   });
 
   useEffect(() => {
+    // No ejecutar hasta que el rol esté definido
+    if (!role || !user?.id) return;
+
     const fetchData = async () => {
       // Filtrar por auditor_id si no es admin
       const baseQuery = (query) => {
@@ -30,29 +33,26 @@ export default function Dashboard() {
         return query;
       };
 
-      // Stats
-      let totalQuery = supabase.from("supervisiones").select("id", { count: "exact", head: true });
-      totalQuery = baseQuery(totalQuery);
-      const { count: total } = await totalQuery;
+      // Stats: cada rol solo consulta lo que le corresponde
+      if (role === "auditor" || isAdmin) {
+        // Stats generales (excluir tipo informatico)
+        const baseQueryGeneral = (q) => {
+          let query = baseQuery(q);
+          return query.or("tipo.eq.general,tipo.is.null");
+        };
 
-      let completadasQuery = supabase.from("supervisiones").select("id", { count: "exact", head: true }).eq("estado", "completado");
-      completadasQuery = baseQuery(completadasQuery);
-      const { count: completadas } = await completadasQuery;
+        const { count: total } = await baseQueryGeneral(supabase.from("supervisiones").select("id", { count: "exact", head: true }));
+        const { count: completadas } = await baseQueryGeneral(supabase.from("supervisiones").select("id", { count: "exact", head: true }).eq("estado", "completado"));
+        const { count: borradores } = await baseQueryGeneral(supabase.from("supervisiones").select("id", { count: "exact", head: true }).eq("estado", "borrador"));
+        const { count: revisadas } = await baseQueryGeneral(supabase.from("supervisiones").select("id", { count: "exact", head: true }).eq("estado", "revisado"));
 
-      let borradoresQuery = supabase.from("supervisiones").select("id", { count: "exact", head: true }).eq("estado", "borrador");
-      borradoresQuery = baseQuery(borradoresQuery);
-      const { count: borradores } = await borradoresQuery;
-
-      let revisadasQuery = supabase.from("supervisiones").select("id", { count: "exact", head: true }).eq("estado", "revisado");
-      revisadasQuery = baseQuery(revisadasQuery);
-      const { count: revisadas } = await revisadasQuery;
-
-      setStats({
-        total: total || 0,
-        completadas: completadas || 0,
-        borradores: borradores || 0,
-        revisadas: revisadas || 0,
-      });
+        setStats({
+          total: total || 0,
+          completadas: completadas || 0,
+          borradores: borradores || 0,
+          revisadas: revisadas || 0,
+        });
+      }
 
       // Stats IT
       if (isAdmin || isSupervisorIT) {
@@ -68,13 +68,22 @@ export default function Dashboard() {
         setStatsIT({ total: totalIT || 0, completadas: completadasIT || 0, borradores: borradoresIT || 0, revisadas: revisadasIT || 0 });
       }
 
-      // Ultimas 5 supervisiones
+      // Ultimas 5 supervisiones - filtrar por tipo según rol
       let recientesQuery = supabase
         .from("supervisiones")
-        .select("id, correlativo, fecha, estado, ris:ris_id(nombre), establecimiento:establecimiento_id(nombre)")
+        .select("id, correlativo, fecha, estado, tipo, ris:ris_id(nombre), establecimiento:establecimiento_id(nombre)")
         .order("fecha", { ascending: false })
         .limit(5);
       recientesQuery = baseQuery(recientesQuery);
+
+      // Filtrar por tipo según el rol del usuario
+      if (isSupervisorIT) {
+        recientesQuery = recientesQuery.eq("tipo", "informatico");
+      } else if (role === "auditor") {
+        recientesQuery = recientesQuery.or("tipo.eq.general,tipo.is.null");
+      }
+      // Admin ve todas sin filtro de tipo
+
       const { data } = await recientesQuery;
 
       setRecientes(data || []);
@@ -86,13 +95,13 @@ export default function Dashboard() {
           .from("supervisiones")
           .select("medico_jefe")
           .not("medico_jefe", "is", null);
-        
+
         const medicoCounts = {};
         (porMedico || []).forEach(s => {
           const medico = s.medico_jefe || "Sin médico";
           medicoCounts[medico] = (medicoCounts[medico] || 0) + 1;
         });
-        
+
         const topMedicos = Object.entries(medicoCounts)
           .sort((a, b) => b[1] - a[1])
           .slice(0, 5)
@@ -102,13 +111,13 @@ export default function Dashboard() {
         const { data: supervisiones } = await supabase
           .from("supervisiones")
           .select("establecimiento_id, establecimiento:establecimiento_id(nombre)");
-        
+
         const eessCounts = {};
         (supervisiones || []).forEach(s => {
           const nombre = s.establecimiento?.nombre || "Sin establecimiento";
           eessCounts[nombre] = (eessCounts[nombre] || 0) + 1;
         });
-        
+
         const topEess = Object.entries(eessCounts)
           .sort((a, b) => b[1] - a[1])
           .slice(0, 5)
@@ -119,7 +128,7 @@ export default function Dashboard() {
           .from("supervisiones")
           .select("observaciones")
           .or("observaciones.ilike.%desabastecido%,observaciones.ilike.%sin insumos%,observaciones.ilike.%falta%");
-        
+
         setAdminStats({
           supervisionesPorMedico: topMedicos,
           establecimientosMasVisitados: topEess,
@@ -131,7 +140,7 @@ export default function Dashboard() {
     };
 
     fetchData();
-  }, [isAdmin, isSupervisorIT, user?.id]);
+  }, [role, isAdmin, isSupervisorIT, user?.id]);
 
   const estadoBadge = (estado) => {
     const map = {
@@ -150,82 +159,218 @@ export default function Dashboard() {
           <p className="text-muted mb-0">Panel de control del sistema de supervision</p>
         </div>
         <div className="d-flex gap-2">
-          {!isViewer && !isSupervisorIT && (
-            <button className="btn btn-primary d-flex align-items-center gap-2" onClick={() => nav("/nueva")}>
-              <BiPlusCircle /> Nueva Supervisión Médica
+          {/* Médico Auditor - Solo ve supervisión general */}
+          {role === "auditor" && (
+            <button className="btn btn-primary d-flex align-items-center gap-2" onClick={() => nav("/nueva-supervision")}>
+              <BiPlusCircle /> Nueva Supervisión de Médico Auditor
             </button>
           )}
-          {(isAdmin || isSupervisorIT) && (
-            <button className="btn btn-outline-primary d-flex align-items-center gap-2" onClick={() => nav("/nueva-informatica")}>
-              <BiDesktop /> Nueva Supervisión IT
+
+          {/* Supervisor Informático - Solo ve supervisión informática */}
+          {role === "supervisor_informatico" && (
+            <button className="btn btn-primary d-flex align-items-center gap-2" onClick={() => nav("/nueva-supervision-informatica")}>
+              <BiDesktop /> Nueva Supervisión Informática
             </button>
+          )}
+
+          {/* Admin - Ve ambos botones */}
+          {isAdmin && (
+            <>
+              <button className="btn btn-primary d-flex align-items-center gap-2" onClick={() => nav("/nueva-supervision")}>
+                <BiPlusCircle /> Nueva Supervisión General
+              </button>
+              <button className="btn btn-outline-primary d-flex align-items-center gap-2" onClick={() => nav("/nueva-supervision-informatica")}>
+                <BiDesktop /> Nueva Supervisión Informática
+              </button>
+            </>
           )}
         </div>
       </div>
 
-      {/* Stats Cards */}
-      <div className="row g-3 mb-4">
-        <div className="col-sm-6 col-xl-3">
-          <div className="card border-0 shadow-sm">
-            <div className="card-body d-flex align-items-center gap-3">
-              <div className="rounded-3 p-2" style={{ background: "#ede9fe" }}>
-                <BiListUl size={28} color="#7c3aed" />
+      {/* Stats Cards - Mostrar SOLO lo correspondiente al rol */}
+
+      {/* AUDITOR - Ve SOLO estadísticas generales */}
+      {role === "auditor" && (
+        <div className="row g-3 mb-4">
+          <div className="col-sm-6 col-xl-3">
+            <div className="card border-0 shadow-sm">
+              <div className="card-body d-flex align-items-center gap-3">
+                <div className="rounded-3 p-2" style={{ background: "#ede9fe" }}>
+                  <BiListUl size={28} color="#7c3aed" />
+                </div>
+                <div>
+                  <div className="text-muted" style={{ fontSize: "0.8rem" }}>Total</div>
+                  <h4 className="mb-0">{loading ? "..." : stats.total}</h4>
+                </div>
               </div>
-              <div>
-                <div className="text-muted" style={{ fontSize: "0.8rem" }}>Total</div>
-                <h4 className="mb-0">{loading ? "..." : stats.total}</h4>
+            </div>
+          </div>
+
+          <div className="col-sm-6 col-xl-3">
+            <div className="card border-0 shadow-sm">
+              <div className="card-body d-flex align-items-center gap-3">
+                <div className="rounded-3 p-2" style={{ background: "#fef3c7" }}>
+                  <BiTimeFive size={28} color="#d97706" />
+                </div>
+                <div>
+                  <div className="text-muted" style={{ fontSize: "0.8rem" }}>Borradores</div>
+                  <h4 className="mb-0">{loading ? "..." : stats.borradores}</h4>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="col-sm-6 col-xl-3">
+            <div className="card border-0 shadow-sm">
+              <div className="card-body d-flex align-items-center gap-3">
+                <div className="rounded-3 p-2" style={{ background: "#d1fae5" }}>
+                  <BiCheckCircle size={28} color="#059669" />
+                </div>
+                <div>
+                  <div className="text-muted" style={{ fontSize: "0.8rem" }}>Completadas</div>
+                  <h4 className="mb-0">{loading ? "..." : stats.completadas}</h4>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="col-sm-6 col-xl-3">
+            <div className="card border-0 shadow-sm">
+              <div className="card-body d-flex align-items-center gap-3">
+                <div className="rounded-3 p-2" style={{ background: "#dbeafe" }}>
+                  <BiCheckCircle size={28} color="#2563eb" />
+                </div>
+                <div>
+                  <div className="text-muted" style={{ fontSize: "0.8rem" }}>Revisadas</div>
+                  <h4 className="mb-0">{loading ? "..." : stats.revisadas}</h4>
+                </div>
               </div>
             </div>
           </div>
         </div>
+      )}
 
-        <div className="col-sm-6 col-xl-3">
-          <div className="card border-0 shadow-sm">
-            <div className="card-body d-flex align-items-center gap-3">
-              <div className="rounded-3 p-2" style={{ background: "#fef3c7" }}>
-                <BiTimeFive size={28} color="#d97706" />
+      {/* SUPERVISOR IT - Ve SOLO estadísticas informáticas */}
+      {role === "supervisor_informatico" && (
+        <div className="row g-3 mb-4">
+          <div className="col-sm-6 col-xl-3">
+            <div className="card border-0 shadow-sm">
+              <div className="card-body d-flex align-items-center gap-3">
+                <div className="rounded-3 p-2" style={{ background: "#e0f2fe" }}>
+                  <BiDesktop size={28} color="#0284c7" />
+                </div>
+                <div>
+                  <div className="text-muted" style={{ fontSize: "0.8rem" }}>Total IT</div>
+                  <h4 className="mb-0">{loading ? "..." : statsIT.total}</h4>
+                </div>
               </div>
-              <div>
-                <div className="text-muted" style={{ fontSize: "0.8rem" }}>Borradores</div>
-                <h4 className="mb-0">{loading ? "..." : stats.borradores}</h4>
+            </div>
+          </div>
+          <div className="col-sm-6 col-xl-3">
+            <div className="card border-0 shadow-sm">
+              <div className="card-body d-flex align-items-center gap-3">
+                <div className="rounded-3 p-2" style={{ background: "#fef3c7" }}>
+                  <BiTimeFive size={28} color="#d97706" />
+                </div>
+                <div>
+                  <div className="text-muted" style={{ fontSize: "0.8rem" }}>Borradores IT</div>
+                  <h4 className="mb-0">{loading ? "..." : statsIT.borradores}</h4>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="col-sm-6 col-xl-3">
+            <div className="card border-0 shadow-sm">
+              <div className="card-body d-flex align-items-center gap-3">
+                <div className="rounded-3 p-2" style={{ background: "#d1fae5" }}>
+                  <BiCheckCircle size={28} color="#059669" />
+                </div>
+                <div>
+                  <div className="text-muted" style={{ fontSize: "0.8rem" }}>Completadas IT</div>
+                  <h4 className="mb-0">{loading ? "..." : statsIT.completadas}</h4>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="col-sm-6 col-xl-3">
+            <div className="card border-0 shadow-sm">
+              <div className="card-body d-flex align-items-center gap-3">
+                <div className="rounded-3 p-2" style={{ background: "#dbeafe" }}>
+                  <BiCheckCircle size={28} color="#2563eb" />
+                </div>
+                <div>
+                  <div className="text-muted" style={{ fontSize: "0.8rem" }}>Revisadas IT</div>
+                  <h4 className="mb-0">{loading ? "..." : statsIT.revisadas}</h4>
+                </div>
               </div>
             </div>
           </div>
         </div>
+      )}
 
-        <div className="col-sm-6 col-xl-3">
-          <div className="card border-0 shadow-sm">
-            <div className="card-body d-flex align-items-center gap-3">
-              <div className="rounded-3 p-2" style={{ background: "#d1fae5" }}>
-                <BiCheckCircle size={28} color="#059669" />
-              </div>
-              <div>
-                <div className="text-muted" style={{ fontSize: "0.8rem" }}>Completadas</div>
-                <h4 className="mb-0">{loading ? "..." : stats.completadas}</h4>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="col-sm-6 col-xl-3">
-          <div className="card border-0 shadow-sm">
-            <div className="card-body d-flex align-items-center gap-3">
-              <div className="rounded-3 p-2" style={{ background: "#dbeafe" }}>
-                <BiCheckCircle size={28} color="#2563eb" />
-              </div>
-              <div>
-                <div className="text-muted" style={{ fontSize: "0.8rem" }}>Revisadas</div>
-                <h4 className="mb-0">{loading ? "..." : stats.revisadas}</h4>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Stats IT */}
-      {(isAdmin || isSupervisorIT) && (
+      {/* ADMIN - Ve AMBAS */}
+      {isAdmin && (
         <>
-          <h6 className="text-muted mb-3 mt-2">Supervisiones Informáticas</h6>
+          <h6 className="text-muted mb-3">Supervisiones Generales</h6>
+          <div className="row g-3 mb-4">
+            <div className="col-sm-6 col-xl-3">
+              <div className="card border-0 shadow-sm">
+                <div className="card-body d-flex align-items-center gap-3">
+                  <div className="rounded-3 p-2" style={{ background: "#ede9fe" }}>
+                    <BiListUl size={28} color="#7c3aed" />
+                  </div>
+                  <div>
+                    <div className="text-muted" style={{ fontSize: "0.8rem" }}>Total</div>
+                    <h4 className="mb-0">{loading ? "..." : stats.total}</h4>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="col-sm-6 col-xl-3">
+              <div className="card border-0 shadow-sm">
+                <div className="card-body d-flex align-items-center gap-3">
+                  <div className="rounded-3 p-2" style={{ background: "#fef3c7" }}>
+                    <BiTimeFive size={28} color="#d97706" />
+                  </div>
+                  <div>
+                    <div className="text-muted" style={{ fontSize: "0.8rem" }}>Borradores</div>
+                    <h4 className="mb-0">{loading ? "..." : stats.borradores}</h4>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="col-sm-6 col-xl-3">
+              <div className="card border-0 shadow-sm">
+                <div className="card-body d-flex align-items-center gap-3">
+                  <div className="rounded-3 p-2" style={{ background: "#d1fae5" }}>
+                    <BiCheckCircle size={28} color="#059669" />
+                  </div>
+                  <div>
+                    <div className="text-muted" style={{ fontSize: "0.8rem" }}>Completadas</div>
+                    <h4 className="mb-0">{loading ? "..." : stats.completadas}</h4>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="col-sm-6 col-xl-3">
+              <div className="card border-0 shadow-sm">
+                <div className="card-body d-flex align-items-center gap-3">
+                  <div className="rounded-3 p-2" style={{ background: "#dbeafe" }}>
+                    <BiCheckCircle size={28} color="#2563eb" />
+                  </div>
+                  <div>
+                    <div className="text-muted" style={{ fontSize: "0.8rem" }}>Revisadas</div>
+                    <h4 className="mb-0">{loading ? "..." : stats.revisadas}</h4>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <h6 className="text-muted mb-3 mt-4">Supervisiones Informáticas</h6>
           <div className="row g-3 mb-4">
             <div className="col-sm-6 col-xl-3">
               <div className="card border-0 shadow-sm">
@@ -322,11 +467,12 @@ export default function Dashboard() {
                       <td>
                         <button
                           className="btn btn-sm btn-outline-primary"
-                          onClick={() =>
+                          onClick={() => {
+                            const base = s.tipo === "informatico" ? "/supervision-informatica" : "/supervision";
                             s.estado === "borrador" && !isViewer
-                              ? nav(`/supervision/${s.id}`)
-                              : nav(`/supervision/${s.id}/ver`)
-                          }
+                              ? nav(`${base}/${s.id}`)
+                              : nav(`${base}/${s.id}/ver`);
+                          }}
                         >
                           {s.estado === "borrador" && !isViewer ? "Editar" : "Ver"}
                         </button>

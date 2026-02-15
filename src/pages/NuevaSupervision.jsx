@@ -78,7 +78,8 @@ export default function NuevaSupervision() {
         digitador: digitadorSeleccionado?.apellidos_nombres || null,
         fecha,
         hora_inicio: new Date().toISOString(),
-        estado: "borrador"
+        estado: "borrador",
+        tipo: "general"  // Supervisión de Médico Auditor
       }])
       .select("id")
       .single();

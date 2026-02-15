@@ -44,7 +44,7 @@ export default function App() {
             <Route index element={<Dashboard />} />
 
             <Route
-              path="nueva"
+              path="nueva-supervision"
               element={
                 <ProtectedRoute allowedRoles={["admin", "auditor"]}>
                   <NuevaSupervision />
@@ -67,7 +67,7 @@ export default function App() {
 
             {/* Supervisión Informática */}
             <Route
-              path="nueva-informatica"
+              path="nueva-supervision-informatica"
               element={
                 <ProtectedRoute allowedRoles={["admin", "supervisor_informatico"]}>
                   <NuevaSupervisionInformatica />

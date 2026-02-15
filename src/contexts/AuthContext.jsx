@@ -1,22 +1,17 @@
-import { createContext, useContext, useEffect, useState, useRef } from "react";
+import { createContext, useContext, useEffect, useState, useRef, useCallback } from "react";
 import { supabase } from "../lib/supabaseClient";
 
 const AuthContext = createContext(null);
 
 // Configuración
 const INACTIVITY_TIMEOUT = 10 * 60 * 1000; // 10 minutos
-const PROFILE_FETCH_TIMEOUT = 15000; // 15 segundos (más tiempo para proxy)
-const MAX_RETRIES = 3; // Reintentos máximos para fetchProfile
-
-// Sistema de logging mejorado
-const DEBUG_MODE = localStorage.getItem('AUTH_DEBUG') === 'true';
+const PROFILE_FETCH_TIMEOUT = 8000; // 8 segundos
+const MAX_RETRIES = 2;
 
 const logger = {
-  debug: (...args) => DEBUG_MODE && console.log('🔍 [AUTH DEBUG]', ...args),
-  info: (...args) => console.log('ℹ️ [AUTH INFO]', ...args),
-  warn: (...args) => console.warn('⚠️ [AUTH WARN]', ...args),
-  error: (...args) => console.error('❌ [AUTH ERROR]', ...args),
-  success: (...args) => console.log('✅ [AUTH SUCCESS]', ...args)
+  info: (...args) => console.log('ℹ️ [AUTH]', ...args),
+  warn: (...args) => console.warn('⚠️ [AUTH]', ...args),
+  error: (...args) => console.error('❌ [AUTH]', ...args),
 };
 
 export function AuthProvider({ children }) {
@@ -24,316 +19,244 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState(null);
-  const initialized = useRef(false);
   const inactivityTimerRef = useRef(null);
-  const retryCountRef = useRef(0);
+  const isSigningOut = useRef(false);
 
-  // Guardar perfil en cache local
+  // ─── Cache de perfil ───
   const cacheProfile = (userId, profileData) => {
     try {
       localStorage.setItem(`profile_${userId}`, JSON.stringify(profileData));
-      logger.debug("Perfil guardado en cache local");
-    } catch (e) {
-      logger.warn("No se pudo guardar perfil en cache:", e.message);
-    }
+    } catch (e) { /* silencioso */ }
   };
 
-  // Obtener perfil cacheado
   const getCachedProfile = (userId) => {
     try {
       const cached = localStorage.getItem(`profile_${userId}`);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        logger.info("Perfil recuperado de cache local", parsed);
-        return parsed;
-      }
-    } catch (e) {
-      logger.warn("No se pudo leer perfil de cache:", e.message);
-    }
+      if (cached) return JSON.parse(cached);
+    } catch (e) { /* silencioso */ }
     return null;
   };
 
-  const fetchProfile = async (userId, retryCount = 0) => {
-    try {
-      logger.debug(`Fetching profile for userId: ${userId} (intento ${retryCount + 1}/${MAX_RETRIES})`);
-      
-      // Timeout configurable
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Timeout al obtener perfil del usuario")), PROFILE_FETCH_TIMEOUT)
-      );
+  const clearProfileCache = () => {
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith('profile_')) localStorage.removeItem(key);
+    });
+  };
 
-      const queryPromise = supabase
+  // ─── Fetch de perfil optimizado ───
+  const fetchProfile = useCallback(async (userId, retryCount = 0) => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), PROFILE_FETCH_TIMEOUT);
+
+      const { data, error } = await supabase
         .from("user_profiles")
         .select("id, user_id, nombre, role, activo")
         .eq("user_id", userId)
-        .single();
+        .single()
+        .abortSignal(controller.signal);
 
-      const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
+      clearTimeout(timeoutId);
 
       if (error) {
-        logger.warn(`Error en fetchProfile: ${error.message}`, error);
-        
-        // Detectar errores específicos
-        if (error.message?.includes('row-level security') || error.code === 'PGRST116') {
-          logger.error("🚨 RLS está bloqueando el acceso al perfil");
-          setAuthError("Error de seguridad: No se pudo cargar el perfil de usuario. Contacte al administrador.");
-          throw new Error("RLS_POLICY_ERROR");
+        if (error.message?.includes('row-level security') || error.message?.includes('infinite recursion')) {
+          logger.error("Error RLS en user_profiles");
+          setAuthError("Error de permisos al cargar perfil. Contacte al administrador.");
+          return null;
         }
-        
-        if (error.code === 'PGRST301') {
-          logger.error("🚨 No se encontró el perfil del usuario");
-          setAuthError("No se encontró el perfil de usuario. Contacte al administrador.");
-          throw new Error("PROFILE_NOT_FOUND");
+
+        if (error.code === 'PGRST116') {
+          logger.error("Perfil no encontrado para usuario:", userId);
+          setAuthError("No se encontro el perfil de usuario.");
+          return null;
         }
-        
-        // Reintentar en caso de errores de red
-        if (retryCount < MAX_RETRIES && (error.message?.includes('fetch') || error.message?.includes('network'))) {
-          logger.info(`Reintentando obtener perfil... (${retryCount + 1}/${MAX_RETRIES})`);
-          await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1)));
+
+        if (retryCount < MAX_RETRIES) {
+          logger.info(`Reintentando perfil... (${retryCount + 1}/${MAX_RETRIES})`);
+          await new Promise(r => setTimeout(r, 1000 * (retryCount + 1)));
           return fetchProfile(userId, retryCount + 1);
         }
-        
-        // Si falla, intentar usar perfil cacheado
+
         const cached = getCachedProfile(userId);
         if (cached) {
-          logger.warn("Usando perfil CACHEADO después de múltiples errores");
+          logger.warn("Usando perfil de cache local");
           return cached;
         }
-        
-        logger.warn("Usando perfil por defecto (sin cache disponible)");
+
         return { user_id: userId, nombre: "", role: "auditor", activo: true };
       }
-      
+
       if (!data) {
-        logger.error("No se recibieron datos del perfil");
         const cached = getCachedProfile(userId);
-        if (cached) return cached;
-        setAuthError("No se pudo cargar el perfil de usuario.");
-        return { user_id: userId, nombre: "", role: "auditor", activo: true };
+        return cached || { user_id: userId, nombre: "", role: "auditor", activo: true };
       }
-      
-      logger.success("Perfil obtenido correctamente", data);
-      cacheProfile(userId, data); // Guardar en cache para futuros fallos
+
+      cacheProfile(userId, data);
       setAuthError(null);
-      retryCountRef.current = 0;
       return data;
-      
+
     } catch (e) {
-      logger.error(`Exception en fetchProfile: ${e.message}`);
-      
-      // No reintentar si es un error específico conocido
-      if (e.message === 'RLS_POLICY_ERROR' || e.message === 'PROFILE_NOT_FOUND') {
-        return null; // Forzar logout
-      }
-      
-      // Reintentar en caso de timeout u otros errores
-      if (retryCount < MAX_RETRIES) {
-        logger.info(`Reintentando después de exception... (${retryCount + 1}/${MAX_RETRIES})`);
-        await new Promise(resolve => setTimeout(resolve, 2000 * (retryCount + 1)));
+      if (e.name === 'AbortError' && retryCount < MAX_RETRIES) {
+        logger.warn(`Timeout, reintentando... (${retryCount + 1}/${MAX_RETRIES})`);
         return fetchProfile(userId, retryCount + 1);
       }
-      
-      // Usar perfil cacheado como último recurso
+
       const cached = getCachedProfile(userId);
       if (cached) {
-        logger.warn("Usando perfil CACHEADO después de exception");
+        logger.warn("Usando perfil de cache tras error");
         return cached;
       }
-      
-      logger.warn("Usando perfil por defecto después de exception (sin cache)");
       return { user_id: userId, nombre: "", role: "auditor", activo: true };
     }
-  };
+  }, []);
 
-  // Detener el timer de inactividad
-  const stopInactivityTimer = () => {
+  // ─── Timer de inactividad ───
+  const stopInactivityTimer = useCallback(() => {
     if (inactivityTimerRef.current) {
       clearTimeout(inactivityTimerRef.current);
       inactivityTimerRef.current = null;
     }
-  };
+  }, []);
 
-  // Reiniciar el timer de inactividad
-  const resetInactivityTimer = () => {
+  const signOut = useCallback(async () => {
+    logger.info("Cerrando sesión...");
+    isSigningOut.current = true;
     stopInactivityTimer();
-    
-    // Solo iniciar el timer si hay una sesión activa
-    if (session?.user) {
-      inactivityTimerRef.current = setTimeout(() => {
-        console.log("AuthProvider: Timeout de inactividad - cerrando sesión");
-        signOut();
-      }, INACTIVITY_TIMEOUT);
-    }
-  };
 
+    // Limpiar estado INMEDIATAMENTE
+    setSession(null);
+    setProfile(null);
+    setAuthError(null);
+    setLoading(false);
+    clearProfileCache();
+
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      logger.error("Error al cerrar sesión:", err.message);
+    } finally {
+      isSigningOut.current = false;
+    }
+  }, [stopInactivityTimer]);
+
+  // ─── Inicialización: una sola fuente de verdad ───
   useEffect(() => {
-    logger.info("AuthProvider inicializando...");
     let isMount = true;
 
-    // Cargar sesión inicial
-    const initAuth = async () => {
-      try {
-        const { data: { session: initialSession }, error } = await supabase.auth.getSession();
-        
-        if (error) {
-          logger.error("Error al obtener sesión inicial:", error.message);
-          setAuthError("Error al inicializar autenticación");
-          setLoading(false);
-          return;
-        }
-        
-        if (initialSession?.user && isMount) {
-          logger.info("Sesión inicial encontrada, cargando perfil...");
-          const p = await fetchProfile(initialSession.user.id);
-          
+    // 1. Obtener sesión inicial y setear estado base
+    supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
+      if (!isMount) return;
+
+      if (initialSession?.user) {
+        setSession(initialSession);
+        // El perfil se cargará cuando onAuthStateChange dispare INITIAL_SESSION o SIGNED_IN
+      } else {
+        // No hay sesión → dejar de cargar
+        setLoading(false);
+      }
+    });
+
+    // 2. Listener único: maneja TODOS los eventos de auth
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, s) => {
+      if (!isMount) return;
+
+      logger.info(`Auth event: ${event}`);
+
+      // Ignorar durante logout
+      if (isSigningOut.current) return;
+
+      switch (event) {
+        case 'INITIAL_SESSION':
+        case 'SIGNED_IN': {
+          if (!s?.user) {
+            setLoading(false);
+            break;
+          }
+
+          setSession(s);
+
+          // Cargar perfil
+          const p = await fetchProfile(s.user.id);
+          if (!isMount) return;
+
           if (!p) {
-            // Error crítico, forzar logout
-            logger.error("No se pudo cargar el perfil, forzando logout");
+            logger.error("Perfil no disponible, forzando logout");
+            isSigningOut.current = true;
             await supabase.auth.signOut();
             setSession(null);
             setProfile(null);
             setLoading(false);
+            isSigningOut.current = false;
             return;
           }
-          
-          setSession(initialSession);
+
           setProfile(p);
-          resetInactivityTimer();
-        }
-        
-        setLoading(false);
-      } catch (err) {
-        logger.error("Exception en initAuth:", err);
-        setAuthError("Error al inicializar");
-        setLoading(false);
-      }
-    };
-
-    initAuth();
-
-    // Escuchar cambios de autenticación
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, s) => {
-      logger.info(`Auth state change: ${event}`);
-      
-      if (!isMount) return;
-
-      // Manejar diferentes eventos
-      switch (event) {
-        case 'SIGNED_IN':
-        case 'TOKEN_REFRESHED':
-          logger.info("Usuario autenticado, obteniendo perfil...");
-          setSession(s);
-          
-          if (s?.user) {
-            const p = await fetchProfile(s.user.id);
-            
-            if (!p) {
-              logger.error("Perfil no disponible después de login, cerrando sesión");
-              await supabase.auth.signOut();
-              setSession(null);
-              setProfile(null);
-              setLoading(false);
-              return;
-            }
-            
-            setProfile(p);
-            resetInactivityTimer();
-          }
+          setLoading(false);
           break;
-          
+        }
+
+        case 'TOKEN_REFRESHED':
+          if (s) setSession(s);
+          // No re-fetch de perfil, ya lo tenemos
+          break;
+
         case 'SIGNED_OUT':
-          logger.info("Usuario cerró sesión");
           setSession(null);
           setProfile(null);
           setAuthError(null);
           stopInactivityTimer();
+          setLoading(false);
           break;
-          
+
         case 'USER_UPDATED':
-          logger.info("Usuario actualizado");
           if (s?.user) {
             const p = await fetchProfile(s.user.id);
-            if (p) setProfile(p);
+            if (isMount && p) setProfile(p);
           }
           break;
-          
-        default:
-          logger.debug(`Evento no manejado: ${event}`);
       }
-
-      setLoading(false);
     });
 
     return () => {
-      logger.debug("AuthProvider cleanup");
       isMount = false;
       subscription?.unsubscribe();
       stopInactivityTimer();
     };
-  }, []);
+  }, [fetchProfile, stopInactivityTimer]);
 
-  // Detectar actividad del usuario y reiniciar el timer
+  // ─── Detector de inactividad ───
   useEffect(() => {
-    // Solo agregar listeners si hay una sesión activa
     if (!session?.user) return;
 
-    const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart', 'click'];
-    
-    const handleActivity = () => {
-      resetInactivityTimer();
+    const resetTimer = () => {
+      stopInactivityTimer();
+      inactivityTimerRef.current = setTimeout(() => {
+        logger.info("Timeout de inactividad");
+        signOut();
+      }, INACTIVITY_TIMEOUT);
     };
 
-    // Agregar event listeners con throttling para mejor performance
-    let throttleTimer = null;
-    const throttledHandleActivity = () => {
-      if (!throttleTimer) {
-        throttleTimer = setTimeout(() => {
-          handleActivity();
-          throttleTimer = null;
-        }, 1000); // Throttle de 1 segundo
+    const events = ['mousedown', 'keypress', 'scroll', 'touchstart'];
+    let throttle = null;
+
+    const handler = () => {
+      if (!throttle) {
+        throttle = setTimeout(() => {
+          resetTimer();
+          throttle = null;
+        }, 2000);
       }
     };
 
-    events.forEach(event => {
-      window.addEventListener(event, throttledHandleActivity, { passive: true });
-    });
+    events.forEach(e => window.addEventListener(e, handler, { passive: true }));
+    resetTimer();
 
-    // Iniciar el timer al montar
-    resetInactivityTimer();
-
-    // Limpiar event listeners al desmontar
     return () => {
-      events.forEach(event => {
-        window.removeEventListener(event, throttledHandleActivity);
-      });
-      if (throttleTimer) clearTimeout(throttleTimer);
+      events.forEach(e => window.removeEventListener(e, handler));
+      if (throttle) clearTimeout(throttle);
       stopInactivityTimer();
     };
-  }, [session?.user]);
-
-  const signOut = async () => {
-    logger.info("Cerrando sesión...");
-    stopInactivityTimer();
-    
-    try {
-      const { error } = await supabase.auth.signOut();
-      if (error) {
-        logger.error("Error al cerrar sesión:", error.message);
-      } else {
-        logger.success("Sesión cerrada correctamente");
-      }
-    } catch (err) {
-      logger.error("Exception al cerrar sesión:", err);
-    } finally {
-      setSession(null);
-      setProfile(null);
-      setAuthError(null);
-      // Limpiar cache de perfiles
-      Object.keys(localStorage).forEach(key => {
-        if (key.startsWith('profile_')) localStorage.removeItem(key);
-      });
-    }
-  };
+  }, [session?.user, signOut, stopInactivityTimer]);
 
   const value = {
     session,
@@ -341,7 +264,7 @@ export function AuthProvider({ children }) {
     profile,
     role: profile?.role ?? null,
     loading,
-    authError, // Exponer errores de autenticación
+    authError,
     signOut,
     isAdmin: profile?.role === "admin",
     isAuditor: profile?.role === "auditor",
