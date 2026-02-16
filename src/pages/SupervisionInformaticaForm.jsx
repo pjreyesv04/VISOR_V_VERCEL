@@ -28,6 +28,10 @@ const EMPTY_CONTROL_CALIDAD = {
   fua: "", fecha_atencion: "", cod_prestacional: "", nombre_profesional: "", observacion: "",
 };
 
+const EMPTY_SEPELIO = {
+  dni: "", nombre_afiliado: "", fecha_registro: "", estado: "", observacion: "",
+};
+
 export default function SupervisionInformaticaForm() {
   const { id } = useParams();
   const supervisionId = id;
@@ -74,6 +78,16 @@ export default function SupervisionInformaticaForm() {
   const [controlCalidadRows, setControlCalidadRows] = useState(
     Array.from({ length: 40 }, () => ({ ...EMPTY_CONTROL_CALIDAD }))
   );
+
+  // Tabla sepelios (C.5)
+  const [sepelioRows, setSepelioRows] = useState(
+    Array.from({ length: 10 }, () => ({ ...EMPTY_SEPELIO }))
+  );
+
+  // Indicadores prestacionales (IP)
+  const [indicadoresDiabetes, setIndicadoresDiabetes] = useState({
+    hba1c: "", microalbuminuria: "", creatinina: "",
+  });
 
   // Firmas
   const sigSupervisorRef = useRef(null);
@@ -314,7 +328,7 @@ export default function SupervisionInformaticaForm() {
       // Parámetros (solo informatico)
       const { data: params, error: pErr } = await supabase
         .from("parametros")
-        .select("id,seccion,codigo,descripcion,requiere_observacion,orden,activo,tipo_campo_condicional,condicion_campo,etiqueta_campo_condicional,depende_de_codigo,depende_valor,has_tabla_extra")
+        .select("id,seccion,codigo,descripcion,requiere_observacion,orden,activo,tipo_campo_condicional,condicion_campo,etiqueta_campo_condicional,depende_de_codigo,depende_valor,has_tabla_extra,parametro_padre_id,es_grupo,opciones_si,opciones_no,campos_si,campos_no")
         .eq("tipo_supervision", "informatico")
         .order("seccion", { ascending: true })
         .order("orden", { ascending: true });
@@ -372,12 +386,42 @@ export default function SupervisionInformaticaForm() {
         setControlCalidadRows(rows);
       }
 
+      // Tabla sepelios
+      const { data: sepData } = await supabase
+        .from("sepelios_supervisados").select("*")
+        .eq("supervision_id", supervisionId).order("fila_numero", { ascending: true });
+      if (sepData && sepData.length > 0) {
+        const rows = Array.from({ length: 10 }, (_, i) => {
+          const existing = sepData.find((x) => x.fila_numero === i + 1);
+          return existing
+            ? { dni: existing.dni || "", nombre_afiliado: existing.nombre_afiliado || "", fecha_registro: existing.fecha_registro || "", estado: existing.estado || "", observacion: existing.observacion || "" }
+            : { ...EMPTY_SEPELIO };
+        });
+        setSepelioRows(rows);
+      }
+
+      // Indicadores prestacionales
+      const { data: ipData } = await supabase
+        .from("indicadores_prestacionales").select("*")
+        .eq("supervision_id", supervisionId);
+      if (ipData && ipData.length > 0) {
+        const diabetesData = {};
+        ipData.forEach(ip => {
+          if (ip.indicador_codigo === 'IP.1' && ip.sub_indicador) {
+            diabetesData[ip.sub_indicador] = ip.valor_cantidad ?? "";
+          }
+        });
+        if (Object.keys(diabetesData).length > 0) {
+          setIndicadoresDiabetes(prev => ({ ...prev, ...diabetesData }));
+        }
+      }
+
       // Evidencias + firmas
       await refreshEvidencias();
       await refreshFirmasSignedUrls(sup.firma_url, sup.firma_digitador_url, sup.firma_medico_jefe_url);
 
-      // Cargar imágenes asociadas a parámetros (A.3, B.3, B.4)
-      const paramsConImagen = (params || []).filter(p => ["A.3", "B.3", "B.4"].includes(p.codigo));
+      // Cargar imágenes asociadas a parámetros (solo B.3)
+      const paramsConImagen = (params || []).filter(p => p.codigo === "B.3");
       for (const p of paramsConImagen) {
         await cargarImagenesParametro(p.id);
       }
@@ -539,6 +583,42 @@ export default function SupervisionInformaticaForm() {
         if (ccErr) throw ccErr;
       }
 
+      // Guardar sepelios_supervisados
+      await supabase.from("sepelios_supervisados").delete().eq("supervision_id", supervisionId);
+      const sepRows = sepelioRows
+        .map((s, i) => ({ ...s, fila_numero: i + 1 }))
+        .filter((s) => s.dni || s.nombre_afiliado);
+      if (sepRows.length > 0) {
+        const { error: sepErr } = await supabase.from("sepelios_supervisados").insert(
+          sepRows.map((s) => ({
+            supervision_id: supervisionId, fila_numero: s.fila_numero,
+            dni: s.dni || null, nombre_afiliado: s.nombre_afiliado || null,
+            fecha_registro: s.fecha_registro || null, estado: s.estado || null,
+            observacion: s.observacion || null,
+          }))
+        );
+        if (sepErr) throw sepErr;
+      }
+
+      // Guardar indicadores_prestacionales
+      await supabase.from("indicadores_prestacionales").delete().eq("supervision_id", supervisionId);
+      const ipRows = [];
+      // IP.1 - Diabetes (sub-indicadores)
+      if (indicadoresDiabetes.hba1c || indicadoresDiabetes.microalbuminuria || indicadoresDiabetes.creatinina) {
+        ['hba1c', 'microalbuminuria', 'creatinina'].forEach(sub => {
+          if (indicadoresDiabetes[sub]) {
+            ipRows.push({
+              supervision_id: supervisionId, indicador_codigo: 'IP.1',
+              sub_indicador: sub, valor_cantidad: parseInt(indicadoresDiabetes[sub], 10) || null,
+            });
+          }
+        });
+      }
+      if (ipRows.length > 0) {
+        const { error: ipErr } = await supabase.from("indicadores_prestacionales").insert(ipRows);
+        if (ipErr) throw ipErr;
+      }
+
       // Auditoría
       await registrarAuditoria("update", "Acta de supervisión informática finalizada y guardada", {
         field: "estado", oldValue: "borrador", newValue: "completado",
@@ -567,6 +647,8 @@ export default function SupervisionInformaticaForm() {
     setRespuestas(respVacias);
     setArchivamientoRows(Array.from({ length: 10 }, () => ({ ...EMPTY_ARCHIVAMIENTO })));
     setControlCalidadRows(Array.from({ length: 40 }, () => ({ ...EMPTY_CONTROL_CALIDAD })));
+    setSepelioRows(Array.from({ length: 10 }, () => ({ ...EMPTY_SEPELIO })));
+    setIndicadoresDiabetes({ hba1c: "", microalbuminuria: "", creatinina: "" });
     sigSupervisorRef.current?.clear();
     sigDigitadorRef.current?.clear();
     sigMedicoJefeRef.current?.clear();
@@ -591,6 +673,143 @@ export default function SupervisionInformaticaForm() {
       return copy;
     });
   };
+
+  const updateSepelio = (index, field, value) => {
+    setSepelioRows((prev) => {
+      const copy = [...prev];
+      copy[index] = { ...copy[index], [field]: value };
+      return copy;
+    });
+  };
+
+  // ========== RENDER: Tabla Sepelios (C.5) ==========
+  const renderTablaSepelios = (parametroC5) => {
+    // Cantidad de filas = valor_cantidad del parámetro C.5
+    const r = respuestas[parametroC5?.id] || {};
+    const cantidadFilas = Math.max(r.valor_cantidad || 0, 1);
+
+    // Ajustar sepelioRows si cambió la cantidad
+    if (sepelioRows.length !== cantidadFilas) {
+      const nuevas = Array.from({ length: cantidadFilas }, (_, i) =>
+        sepelioRows[i] ? { ...sepelioRows[i] } : { ...EMPTY_SEPELIO }
+      );
+      // No usar setSepelioRows aquí directamente para evitar loop,
+      // se ajustará mediante useEffect o al renderizar
+    }
+
+    const filasAMostrar = cantidadFilas;
+
+    return (
+      <div className="mt-3 mb-3">
+        <label className="form-label fw-semibold text-primary">Registro de Sepelios ({filasAMostrar} filas)</label>
+        <div className="table-responsive">
+          <table className="table table-bordered table-sm" style={{ fontSize: "0.82rem" }}>
+            <thead className="table-light">
+              <tr>
+                <th style={{ width: 40 }}>N°</th>
+                <th style={{ width: 120 }}>DNI</th>
+                <th>Nombre del Afiliado</th>
+                <th style={{ width: 130 }}>Fecha de Registro</th>
+                <th style={{ width: 120 }}>Estado</th>
+                <th>Observación</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from({ length: filasAMostrar }, (_, i) => {
+                const row = sepelioRows[i] || { ...EMPTY_SEPELIO };
+                return (
+                  <tr key={i}>
+                    <td className="text-center align-middle">{i + 1}</td>
+                    <td><input type="text" className="form-control form-control-sm" value={row.dni || ""} onChange={(e) => {
+                      // Expandir sepelioRows si es necesario
+                      if (i >= sepelioRows.length) {
+                        const expanded = [...sepelioRows];
+                        while (expanded.length <= i) expanded.push({ ...EMPTY_SEPELIO });
+                        expanded[i] = { ...expanded[i], dni: e.target.value };
+                        setSepelioRows(expanded);
+                      } else {
+                        updateSepelio(i, "dni", e.target.value);
+                      }
+                    }} placeholder="DNI" maxLength={8} /></td>
+                    <td><input type="text" className="form-control form-control-sm" value={row.nombre_afiliado || ""} onChange={(e) => {
+                      if (i >= sepelioRows.length) {
+                        const expanded = [...sepelioRows];
+                        while (expanded.length <= i) expanded.push({ ...EMPTY_SEPELIO });
+                        expanded[i] = { ...expanded[i], nombre_afiliado: e.target.value };
+                        setSepelioRows(expanded);
+                      } else {
+                        updateSepelio(i, "nombre_afiliado", e.target.value);
+                      }
+                    }} placeholder="Nombre" /></td>
+                    <td><input type="date" className="form-control form-control-sm" value={row.fecha_registro || ""} onChange={(e) => {
+                      if (i >= sepelioRows.length) {
+                        const expanded = [...sepelioRows];
+                        while (expanded.length <= i) expanded.push({ ...EMPTY_SEPELIO });
+                        expanded[i] = { ...expanded[i], fecha_registro: e.target.value };
+                        setSepelioRows(expanded);
+                      } else {
+                        updateSepelio(i, "fecha_registro", e.target.value);
+                      }
+                    }} /></td>
+                    <td><input type="text" className="form-control form-control-sm" value={row.estado || ""} onChange={(e) => {
+                      if (i >= sepelioRows.length) {
+                        const expanded = [...sepelioRows];
+                        while (expanded.length <= i) expanded.push({ ...EMPTY_SEPELIO });
+                        expanded[i] = { ...expanded[i], estado: e.target.value };
+                        setSepelioRows(expanded);
+                      } else {
+                        updateSepelio(i, "estado", e.target.value);
+                      }
+                    }} placeholder="Estado" /></td>
+                    <td><input type="text" className="form-control form-control-sm" value={row.observacion || ""} onChange={(e) => {
+                      if (i >= sepelioRows.length) {
+                        const expanded = [...sepelioRows];
+                        while (expanded.length <= i) expanded.push({ ...EMPTY_SEPELIO });
+                        expanded[i] = { ...expanded[i], observacion: e.target.value };
+                        setSepelioRows(expanded);
+                      } else {
+                        updateSepelio(i, "observacion", e.target.value);
+                      }
+                    }} placeholder="Obs." /></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
+  // ========== RENDER: Tabla Indicadores Diabetes (IP.1) ==========
+  const renderTablaIndicadoresDiabetes = () => (
+    <div className="mt-3 mb-3">
+      <div className="table-responsive">
+        <table className="table table-bordered table-sm" style={{ fontSize: "0.85rem" }}>
+          <thead className="table-light">
+            <tr>
+              <th>Indicador</th>
+              <th style={{ width: 200 }}>Cantidad a la fecha de supervisión</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>HBA1c (Hemoglobina Glicosilada)</td>
+              <td><input type="number" className="form-control form-control-sm" min={0} value={indicadoresDiabetes.hba1c} onChange={(e) => setIndicadoresDiabetes(prev => ({ ...prev, hba1c: e.target.value }))} /></td>
+            </tr>
+            <tr>
+              <td>Microalbuminuria sérica</td>
+              <td><input type="number" className="form-control form-control-sm" min={0} value={indicadoresDiabetes.microalbuminuria} onChange={(e) => setIndicadoresDiabetes(prev => ({ ...prev, microalbuminuria: e.target.value }))} /></td>
+            </tr>
+            <tr>
+              <td>Creatinina</td>
+              <td><input type="number" className="form-control form-control-sm" min={0} value={indicadoresDiabetes.creatinina} onChange={(e) => setIndicadoresDiabetes(prev => ({ ...prev, creatinina: e.target.value }))} /></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 
   // ========== RENDER: Tabla Archivamiento ==========
   const renderTablaArchivamiento = () => (
@@ -690,8 +909,98 @@ export default function SupervisionInformaticaForm() {
     </div>
   );
 
+  // ========== RENDER: Sub-parámetros (grupo B.1, B.4) ==========
+  const renderGrupoSubParametros = (padre) => {
+    const hijos = (parametros || []).filter(p => p.parametro_padre_id === padre.id && p.activo !== false)
+      .sort((a, b) => (a.orden ?? 9999) - (b.orden ?? 9999));
+
+    if (hijos.length === 0) return null;
+
+    // B.4 invierte: No/Si (No es default izquierdo)
+    const esB4 = padre.codigo === 'B.4';
+
+    return (
+      <div className="mt-2">
+        <div className="table-responsive">
+          <table className="table table-bordered table-sm" style={{ fontSize: "0.85rem" }}>
+            <thead className="table-light">
+              <tr>
+                <th>Sistema</th>
+                <th style={{ width: 60 }}>{esB4 ? "No" : "Sí"}</th>
+                <th style={{ width: 60 }}>{esB4 ? "Sí" : "No"}</th>
+                <th>{esB4 ? "Acción Realizada" : "Detalle"}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {hijos.map(hijo => {
+                const r = respuestas[hijo.id] || { valor_bool: null, observacion: "", valor_texto: "" };
+                // B.4: Sí = tiene inconveniente → mostrar opciones_si (acción realizada)
+                //       No = sin inconveniente → mostrar opciones_no si existen
+                // B.1: Sí = tiene acceso → no dropdown. No = sin acceso → opciones_no
+                let opcionesDropdown = [];
+                let mostrarDropdown = false;
+                if (esB4) {
+                  if (r.valor_bool === true && safeJsonParse(hijo.opciones_si).length > 0) {
+                    opcionesDropdown = safeJsonParse(hijo.opciones_si);
+                    mostrarDropdown = true;
+                  } else if (r.valor_bool === false && safeJsonParse(hijo.opciones_no).length > 0) {
+                    opcionesDropdown = safeJsonParse(hijo.opciones_no);
+                    mostrarDropdown = true;
+                  }
+                } else {
+                  if (r.valor_bool === false && safeJsonParse(hijo.opciones_no).length > 0) {
+                    opcionesDropdown = safeJsonParse(hijo.opciones_no);
+                    mostrarDropdown = true;
+                  }
+                }
+
+                return (
+                  <tr key={hijo.id}>
+                    <td className="align-middle fw-semibold">{hijo.descripcion}</td>
+                    <td className="text-center align-middle">
+                      <input type="radio" name={`si_no_${hijo.id}`}
+                        checked={esB4 ? r.valor_bool === false : r.valor_bool === true}
+                        onChange={() => setResp(hijo.id, { valor_bool: esB4 ? false : true })} />
+                    </td>
+                    <td className="text-center align-middle">
+                      <input type="radio" name={`si_no_${hijo.id}`}
+                        checked={esB4 ? r.valor_bool === true : r.valor_bool === false}
+                        onChange={() => setResp(hijo.id, { valor_bool: esB4 ? true : false })} />
+                    </td>
+                    <td>
+                      {mostrarDropdown && opcionesDropdown.length > 0 && (
+                        <select className="form-select form-select-sm" value={r.valor_texto || ""} onChange={(e) => setResp(hijo.id, { valor_texto: e.target.value })}>
+                          <option value="">Seleccione motivo...</option>
+                          {opcionesDropdown.map((op, i) => (
+                            <option key={i} value={op}>{op}</option>
+                          ))}
+                        </select>
+                      )}
+                      {mostrarDropdown && opcionesDropdown.length === 0 && (
+                        <input type="text" className="form-control form-control-sm" value={r.observacion || ""} onChange={(e) => setResp(hijo.id, { observacion: e.target.value })} placeholder="Detalle..." />
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
+  // Helper para parsear JSON seguro
+  const safeJsonParse = (str) => {
+    if (!str) return [];
+    try { return JSON.parse(str); } catch { return []; }
+  };
+
   // ========== RENDER: Parámetro individual ==========
   const renderParametroSiNo = (p) => {
+    // No renderizar hijos directamente (se renderizan dentro del grupo padre)
+    if (p.parametro_padre_id) return null;
+
     const r = respuestas[p.id] || { valor_bool: null, observacion: "", valor_fecha: null, valor_cantidad: null, valor_cantidad_2: null, valor_cantidad_3: null, valor_texto: "" };
 
     const mostrarCampoCondicional = () => {
@@ -705,11 +1014,19 @@ export default function SupervisionInformaticaForm() {
     const showConditional = mostrarCampoCondicional();
     const showTablaArch = p.has_tabla_extra === "tabla_archivamiento";
     const showTablaCC = p.has_tabla_extra === "tabla_control_calidad";
+    const showTablaSep = p.has_tabla_extra === "tabla_sepelios";
+    const showTablaIPDiabetes = p.has_tabla_extra === "tabla_indicadores_diabetes";
 
     // Para secciones C, D, G que son solo CANTIDAD, ocultar radios Si/No
     const esSoloCantidad = p.tipo_campo_condicional === "cantidad" && p.condicion_campo === "siempre" && !p.has_tabla_extra;
-    // Para tablas, ocultar radios
-    const ocultarRadiosSiNo = showTablaArch || showTablaCC || esSoloCantidad;
+    // Para tablas y grupos, ocultar radios
+    const ocultarRadiosSiNo = showTablaArch || showTablaCC || showTablaSep || showTablaIPDiabetes || esSoloCantidad || p.es_grupo;
+
+    // Opciones dropdown condicionales
+    const opcionesSi = safeJsonParse(p.opciones_si);
+    const opcionesNo = safeJsonParse(p.opciones_no);
+    const camposSi = safeJsonParse(p.campos_si);
+    const camposNo = safeJsonParse(p.campos_no);
 
     return (
       <div className="mb-3" key={p.id}>
@@ -733,8 +1050,11 @@ export default function SupervisionInformaticaForm() {
             </div>
           )}
 
-          {/* Campo condicional: Cantidad */}
-          {showConditional && p.tipo_campo_condicional === "cantidad" && (
+          {/* Grupo de sub-parámetros (B.1, B.4) */}
+          {p.es_grupo && renderGrupoSubParametros(p)}
+
+          {/* Campo condicional: Cantidad (solo si NO tiene campos_si que ya lo manejan) */}
+          {showConditional && p.tipo_campo_condicional === "cantidad" && camposSi.length === 0 && (
             <div className="mt-2">
               <label className="form-label text-primary fw-semibold">
                 {p.etiqueta_campo_condicional || "Cantidad"}
@@ -750,8 +1070,109 @@ export default function SupervisionInformaticaForm() {
             </div>
           )}
 
-          {/* Campo condicional: Fecha */}
-          {showConditional && p.tipo_campo_condicional === "fecha" && (
+          {/* Campos extra para Sí (E.1 numeración, B.3 versiones, etc.) */}
+          {r.valor_bool === true && camposSi.length > 0 && (
+            <div className="mt-2 ps-3 border-start border-primary border-2">
+              {camposSi.includes("cantidad_fuas_entregados") && (
+                <div className="mb-2">
+                  <label className="form-label text-primary fw-semibold">Cantidad de FUAs entregados</label>
+                  <input type="number" className="form-control" style={{ maxWidth: 200 }} min={0} value={r.valor_cantidad ?? ""} onChange={(e) => setResp(p.id, { valor_cantidad: e.target.value === "" ? null : parseInt(e.target.value, 10) })} />
+                </div>
+              )}
+              {camposSi.includes("numeracion_inicial") && (
+                <div className="mb-2">
+                  <label className="form-label text-primary fw-semibold">Numeración Inicial</label>
+                  <input type="text" className="form-control" style={{ maxWidth: 300 }} value={r.valor_texto || ""} onChange={(e) => setResp(p.id, { valor_texto: e.target.value })} placeholder="xxxxxxx-xx-xxxxxxxx" />
+                </div>
+              )}
+              {camposSi.includes("numeracion_final") && (
+                <div className="mb-2">
+                  <label className="form-label text-primary fw-semibold">Numeración Final</label>
+                  <input type="text" className="form-control" style={{ maxWidth: 300 }} value={r.valor_texto_2 || ""} onChange={(e) => setResp(p.id, { valor_texto_2: e.target.value })} placeholder="xxxxxxx-xx-xxxxxxxx" />
+                </div>
+              )}
+              {camposSi.includes("cantidad_fuas_devueltos") && (
+                <div className="mb-2">
+                  <label className="form-label text-primary fw-semibold">Cantidad de FUAs devueltos</label>
+                  <input type="number" className="form-control" style={{ maxWidth: 200 }} min={0} value={r.valor_cantidad ?? ""} onChange={(e) => setResp(p.id, { valor_cantidad: e.target.value === "" ? null : parseInt(e.target.value, 10) })} />
+                </div>
+              )}
+              {camposSi.includes("cantidad_fuas_anuladas") && (
+                <div className="mb-2">
+                  <label className="form-label text-primary fw-semibold">Cantidad de FUAs Anuladas</label>
+                  <input type="number" className="form-control" style={{ maxWidth: 200 }} min={0} value={r.valor_cantidad_2 ?? ""} onChange={(e) => setResp(p.id, { valor_cantidad_2: e.target.value === "" ? null : parseInt(e.target.value, 10) })} />
+                </div>
+              )}
+              {camposSi.includes("fecha_ultimo_tomo") && (
+                <div className="mb-2">
+                  <label className="form-label text-primary fw-semibold">Fecha del último Tomo</label>
+                  <input type="date" className="form-control" style={{ maxWidth: 250 }} value={r.valor_fecha || ""} onChange={(e) => setResp(p.id, { valor_fecha: e.target.value || null })} />
+                </div>
+              )}
+              {camposSi.includes("hora_registro") && (
+                <div className="mb-2">
+                  <label className="form-label text-primary fw-semibold">Hora de ingreso del día de la Supervisión</label>
+                  <input type="time" className="form-control" style={{ maxWidth: 200 }} value={r.valor_texto || ""} onChange={(e) => setResp(p.id, { valor_texto: e.target.value })} />
+                </div>
+              )}
+              {camposSi.includes("velocidad_mbps") && (
+                <div className="mb-2">
+                  <label className="form-label text-primary fw-semibold">Velocidad (Mbps)</label>
+                  <input type="number" className="form-control" style={{ maxWidth: 200 }} min={0} value={r.valor_cantidad ?? ""} onChange={(e) => setResp(p.id, { valor_cantidad: e.target.value === "" ? null : parseInt(e.target.value, 10) })} />
+                </div>
+              )}
+              {camposSi.includes("estado_internet") && opcionesSi.length > 0 && (
+                <div className="mb-2">
+                  <label className="form-label text-primary fw-semibold">Estado</label>
+                  <select className="form-select" style={{ maxWidth: 250 }} value={r.valor_texto || ""} onChange={(e) => setResp(p.id, { valor_texto: e.target.value })}>
+                    <option value="">Seleccione...</option>
+                    {opcionesSi.map((op, i) => <option key={i} value={op}>{op}</option>)}
+                  </select>
+                </div>
+              )}
+              {camposSi.includes("fecha_hora_ultima_carga") && (
+                <div className="mb-2">
+                  <label className="form-label text-primary fw-semibold">Fecha y hora de última carga</label>
+                  <input type="datetime-local" className="form-control" style={{ maxWidth: 300 }} value={r.valor_texto || ""} onChange={(e) => setResp(p.id, { valor_texto: e.target.value })} />
+                </div>
+              )}
+              {camposSi.includes("version_arfsis") && (
+                <div className="mb-2">
+                  <label className="form-label text-primary fw-semibold">Versión del ARFSIS Web</label>
+                  <input type="text" className="form-control" style={{ maxWidth: 300 }} value={r.valor_texto || ""} onChange={(e) => setResp(p.id, { valor_texto: e.target.value })} placeholder="Ej: 3.2.1" />
+                </div>
+              )}
+              {camposSi.includes("fecha_act_maestros") && (
+                <div className="mb-2">
+                  <label className="form-label text-primary fw-semibold">Fecha última actualización de maestros</label>
+                  <input type="date" className="form-control" style={{ maxWidth: 250 }} value={r.valor_fecha || ""} onChange={(e) => setResp(p.id, { valor_fecha: e.target.value || null })} />
+                </div>
+              )}
+              {camposSi.includes("fecha_act_afiliados") && (
+                <div className="mb-2">
+                  <label className="form-label text-primary fw-semibold">Fecha última actualización de afiliados</label>
+                  <input type="date" className="form-control" style={{ maxWidth: 250 }} value={r.valor_texto_2 || ""} onChange={(e) => setResp(p.id, { valor_texto_2: e.target.value })} />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Dropdown para "No" con opciones configurables */}
+          {r.valor_bool === false && opcionesNo.length > 0 && !p.es_grupo && (
+            <div className="mt-2">
+              <label className="form-label text-primary fw-semibold">Motivo</label>
+              <select className="form-select" style={{ maxWidth: 400 }} value={r.valor_texto || ""} onChange={(e) => setResp(p.id, { valor_texto: e.target.value })}>
+                <option value="">Seleccione...</option>
+                {opcionesNo.map((op, i) => <option key={i} value={op}>{op}</option>)}
+              </select>
+              {r.valor_texto === "Otro" && (
+                <input type="text" className="form-control mt-2" style={{ maxWidth: 400 }} value={r.observacion || ""} onChange={(e) => setResp(p.id, { observacion: e.target.value })} placeholder="Especifique..." />
+              )}
+            </div>
+          )}
+
+          {/* Campo condicional: Fecha (sin campos_si, ej: fallback) */}
+          {showConditional && p.tipo_campo_condicional === "fecha" && camposSi.length === 0 && (
             <div className="mt-2">
               <label className="form-label text-primary fw-semibold">
                 {p.etiqueta_campo_condicional || "Fecha"}
@@ -760,8 +1181,8 @@ export default function SupervisionInformaticaForm() {
             </div>
           )}
 
-          {/* Campo condicional: Texto */}
-          {showConditional && p.tipo_campo_condicional === "texto" && (
+          {/* Campo condicional: Texto (sin campos_si, ej: A.7 piso) */}
+          {showConditional && p.tipo_campo_condicional === "texto" && camposSi.length === 0 && !p.es_grupo && (
             <div className="mt-2">
               <label className="form-label text-primary fw-semibold">
                 {p.etiqueta_campo_condicional || "Texto"}
@@ -776,19 +1197,25 @@ export default function SupervisionInformaticaForm() {
           {/* Tabla Control Calidad */}
           {showTablaCC && renderTablaControlCalidad()}
 
-          {/* Observación por ítem */}
-          {p.requiere_observacion && (
+          {/* Tabla Sepelios */}
+          {showTablaSep && renderTablaSepelios(p)}
+
+          {/* Tabla Indicadores Diabetes */}
+          {showTablaIPDiabetes && renderTablaIndicadoresDiabetes()}
+
+          {/* Observación por ítem (solo si no tiene opciones_no con dropdown) */}
+          {p.requiere_observacion && !(r.valor_bool === false && opcionesNo.length > 0) && !p.es_grupo && (
             <div className="mt-2">
               <label className="form-label">Observación</label>
               <textarea className="form-control" rows={2} value={r.observacion || ""} onChange={(e) => setResp(p.id, { observacion: e.target.value })} placeholder="Detalle / sustento..." />
             </div>
           )}
 
-          {/* Carga de imagen por parámetro (para items que lo requieran, ej: A.3, B.3, B.4) */}
-          {["A.3", "B.3", "B.4"].includes(p.codigo) && (
+          {/* Carga de imagen por parámetro (solo B.3 ahora, quitamos A.3 y B.4) */}
+          {["B.3"].includes(p.codigo) && (
             <div className="mt-2">
               <label className="form-label fw-semibold text-primary">
-                <i className="bi bi-camera"></i> Adjuntar pantallazo / imagen
+                Adjuntar pantallazo / imagen
               </label>
               <input
                 type="file"
@@ -803,7 +1230,6 @@ export default function SupervisionInformaticaForm() {
                 }}
               />
               {subiendoImagenParametro[p.id] && <small className="text-muted">Subiendo...</small>}
-              {/* Mostrar imágenes subidas */}
               {(imagenesPorParametro[p.id] || []).length > 0 && (
                 <div className="d-flex flex-wrap gap-2 mt-2">
                   {imagenesPorParametro[p.id].map((img, idx) => (

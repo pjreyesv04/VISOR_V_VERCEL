@@ -47,19 +47,24 @@ export function AuthProvider({ children }) {
   // ─── Fetch de perfil optimizado ───
   const fetchProfile = useCallback(async (userId, retryCount = 0) => {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), PROFILE_FETCH_TIMEOUT);
+      logger.info(`fetchProfile intento ${retryCount + 1} para ${userId}`);
 
-      const { data, error } = await supabase
+      // Timeout con Promise.race para mayor compatibilidad
+      const queryPromise = supabase
         .from("user_profiles")
         .select("id, user_id, nombre, role, activo")
         .eq("user_id", userId)
-        .single()
-        .abortSignal(controller.signal);
+        .single();
 
-      clearTimeout(timeoutId);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("TIMEOUT")), PROFILE_FETCH_TIMEOUT)
+      );
+
+      const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
 
       if (error) {
+        logger.error("Error fetchProfile:", error.message, error.code);
+
         if (error.message?.includes('row-level security') || error.message?.includes('infinite recursion')) {
           logger.error("Error RLS en user_profiles");
           setAuthError("Error de permisos al cargar perfil. Contacte al administrador.");
@@ -92,12 +97,15 @@ export function AuthProvider({ children }) {
         return cached || { user_id: userId, nombre: "", role: "auditor", activo: true };
       }
 
+      logger.info("Perfil obtenido OK:", data.nombre, data.role);
       cacheProfile(userId, data);
       setAuthError(null);
       return data;
 
     } catch (e) {
-      if (e.name === 'AbortError' && retryCount < MAX_RETRIES) {
+      logger.error("Excepción en fetchProfile:", e.message);
+
+      if (e.message === "TIMEOUT" && retryCount < MAX_RETRIES) {
         logger.warn(`Timeout, reintentando... (${retryCount + 1}/${MAX_RETRIES})`);
         return fetchProfile(userId, retryCount + 1);
       }
@@ -143,6 +151,7 @@ export function AuthProvider({ children }) {
   // ─── Inicialización: una sola fuente de verdad ───
   useEffect(() => {
     let isMount = true;
+    isLoadingProfile.current = false; // Reset al montar
 
     // 1. Obtener sesión inicial y setear estado base
     supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
@@ -184,23 +193,38 @@ export function AuthProvider({ children }) {
 
           // Cargar perfil
           isLoadingProfile.current = true;
-          const p = await fetchProfile(s.user.id);
-          isLoadingProfile.current = false;
-          if (!isMount) return;
+          logger.info("Cargando perfil para:", s.user.id);
+          try {
+            const p = await fetchProfile(s.user.id);
+            isLoadingProfile.current = false;
+            logger.info("Perfil cargado:", p ? "OK" : "NULL");
+            if (!isMount) return;
 
-          if (!p) {
-            logger.error("Perfil no disponible, forzando logout");
-            isSigningOut.current = true;
-            await supabase.auth.signOut();
-            setSession(null);
-            setProfile(null);
+            if (!p) {
+              logger.error("Perfil no disponible, forzando logout");
+              isSigningOut.current = true;
+              await supabase.auth.signOut();
+              setSession(null);
+              setProfile(null);
+              setLoading(false);
+              isSigningOut.current = false;
+              return;
+            }
+
+            setProfile(p);
             setLoading(false);
-            isSigningOut.current = false;
-            return;
+          } catch (err) {
+            isLoadingProfile.current = false;
+            logger.error("Error inesperado cargando perfil:", err);
+            // Usar cache o perfil mínimo para no bloquear
+            const cached = getCachedProfile(s.user.id);
+            if (cached) {
+              setProfile(cached);
+            } else {
+              setProfile({ user_id: s.user.id, nombre: "", role: "auditor", activo: true });
+            }
+            setLoading(false);
           }
-
-          setProfile(p);
-          setLoading(false);
           break;
         }
 
@@ -226,10 +250,19 @@ export function AuthProvider({ children }) {
       }
     });
 
+    // Safety timeout: si loading sigue true después de 12s, forzar false
+    const safetyTimeout = setTimeout(() => {
+      if (isMount) {
+        logger.warn("Safety timeout: forzando loading=false después de 12s");
+        setLoading(false);
+      }
+    }, 12000);
+
     return () => {
       isMount = false;
       subscription?.unsubscribe();
       stopInactivityTimer();
+      clearTimeout(safetyTimeout);
     };
   }, [fetchProfile, stopInactivityTimer]);
 

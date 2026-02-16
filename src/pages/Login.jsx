@@ -1,13 +1,22 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth";
 
 export default function Login() {
   const nav = useNavigate();
+  const { session, loading: authLoading } = useAuth();
+
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!authLoading && session) {
+      nav("/", { replace: true });
+    }
+  }, [authLoading, session, nav]);
 
   const signIn = async (e) => {
     e.preventDefault();
@@ -15,7 +24,7 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { error } = await supabase.auth.signInWithPassword({
         email,
         password: pass,
       });
@@ -25,38 +34,10 @@ export default function Login() {
         return setErr(error.message);
       }
 
-      // Verificar si la cuenta esta activa (con timeout de 8s)
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-      const { data: profile, error: profErr } = await supabase
-        .from("user_profiles")
-        .select("activo")
-        .eq("user_id", data.user.id)
-        .single()
-        .abortSignal(controller.signal);
-
-      clearTimeout(timeoutId);
-
-      if (profErr || !profile) {
-        setLoading(false);
-        console.error("Error al verificar perfil:", profErr);
-        return setErr("No se encontro el perfil de usuario. Contacte al administrador.");
-      }
-
-      if (!profile.activo) {
-        await supabase.auth.signOut();
-        setLoading(false);
-        return setErr("Tu cuenta ha sido desactivada. Contacta al administrador.");
-      }
-
-      nav("/");
+      // La navegación la controla el useEffect cuando AuthContext confirme la sesión.
+      setLoading(false);
     } catch (e) {
       setLoading(false);
-      if (e.name === 'AbortError') {
-        console.error("Timeout al verificar perfil de usuario");
-        return setErr("Tiempo de espera agotado. Intente nuevamente.");
-      }
       console.error("Error en login:", e);
       return setErr("Error inesperado. Intente nuevamente.");
     }

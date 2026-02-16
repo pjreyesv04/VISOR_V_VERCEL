@@ -13,6 +13,11 @@ function groupBy(arr, keyFn) {
   }, {});
 }
 
+const safeJsonParse = (str) => {
+  if (!str) return [];
+  try { return JSON.parse(str); } catch { return []; }
+};
+
 export default function SupervisionInformaticaView() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -29,6 +34,9 @@ export default function SupervisionInformaticaView() {
   const [firmaUrls, setFirmaUrls] = useState({ supervisor: null, digitador: null, medicoJefe: null });
   const [archivamientoRows, setArchivamientoRows] = useState([]);
   const [controlCalidadRows, setControlCalidadRows] = useState([]);
+  const [sepelioRows, setSepelioRows] = useState([]);
+  const [indicadoresDiabetes, setIndicadoresDiabetes] = useState({});
+  const [imagenesPorParametro, setImagenesPorParametro] = useState({});
 
   const seccionesAgrupadas = useMemo(() => {
     const activos = (parametros || []).filter((p) => p.activo !== false);
@@ -60,10 +68,10 @@ export default function SupervisionInformaticaView() {
       const { data: est } = await supabase.from("establecimientos").select("nombre").eq("id", sup.establecimiento_id).single();
       setEessNombre(est?.nombre || "");
 
-      // Parámetros IT
+      // Parámetros IT (incluyendo nuevas columnas)
       const { data: params } = await supabase
         .from("parametros")
-        .select("id,seccion,codigo,descripcion,requiere_observacion,orden,activo,tipo_campo_condicional,condicion_campo,etiqueta_campo_condicional,has_tabla_extra")
+        .select("id,seccion,codigo,descripcion,requiere_observacion,orden,activo,tipo_campo_condicional,condicion_campo,etiqueta_campo_condicional,has_tabla_extra,parametro_padre_id,es_grupo,opciones_si,opciones_no,campos_si,campos_no")
         .eq("tipo_supervision", "informatico")
         .order("seccion").order("orden");
       setParametros(params || []);
@@ -89,6 +97,26 @@ export default function SupervisionInformaticaView() {
         .eq("supervision_id", id).order("fila_numero");
       setControlCalidadRows(ccData || []);
 
+      // Sepelios
+      const { data: sepData } = await supabase
+        .from("sepelios_supervisados").select("*")
+        .eq("supervision_id", id).order("fila_numero");
+      setSepelioRows(sepData || []);
+
+      // Indicadores prestacionales
+      const { data: ipData } = await supabase
+        .from("indicadores_prestacionales").select("*")
+        .eq("supervision_id", id);
+      if (ipData && ipData.length > 0) {
+        const diabetesData = {};
+        ipData.forEach(ip => {
+          if (ip.indicador_codigo === 'IP.1' && ip.sub_indicador) {
+            diabetesData[ip.sub_indicador] = ip.valor_cantidad ?? "";
+          }
+        });
+        setIndicadoresDiabetes(diabetesData);
+      }
+
       // Evidencias
       const { data: evData } = await supabase
         .from("evidencias").select("id,archivo_url,tipo,created_at,descripcion")
@@ -103,6 +131,22 @@ export default function SupervisionInformaticaView() {
         withSigned.push({ ...ev, signedUrl });
       }
       setEvidencias(withSigned);
+
+      // Imágenes por parámetro (B.3)
+      const paramsConImagen = (params || []).filter(p => p.codigo === "B.3");
+      for (const p of paramsConImagen) {
+        const { data: imgData } = await supabase
+          .from("evidencias").select("archivo_url")
+          .eq("supervision_id", id).like("descripcion", `%${p.id}%`);
+        if (imgData && imgData.length > 0) {
+          const imgs = [];
+          for (const ev of imgData) {
+            const { data: sdata } = await supabase.storage.from("evidencias").createSignedUrl(ev.archivo_url, 3600);
+            imgs.push({ path: ev.archivo_url, signedUrl: sdata?.signedUrl || null });
+          }
+          setImagenesPorParametro(prev => ({ ...prev, [p.id]: imgs }));
+        }
+      }
 
       // Firmas
       const makeFirmaUrl = async (path) => {
@@ -150,6 +194,186 @@ export default function SupervisionInformaticaView() {
       .eq("id", id);
     if (error) { toast.error("Error al marcar como revisado"); }
     else { toast.success("Supervisión marcada como revisada"); nav("/supervisiones-informatica"); }
+  };
+
+  // ========== Render de sub-parámetros (B.1, B.4) en vista ==========
+  const renderGrupoSubParametrosView = (padre) => {
+    const hijos = (parametros || []).filter(p => p.parametro_padre_id === padre.id && p.activo !== false)
+      .sort((a, b) => (a.orden ?? 9999) - (b.orden ?? 9999));
+    if (hijos.length === 0) return null;
+
+    const esB4 = padre.codigo === 'B.4';
+
+    return (
+      <div className="mt-2 ms-3">
+        <div className="table-responsive">
+          <table className="table table-bordered table-sm" style={{ fontSize: "0.82rem" }}>
+            <thead className="table-light">
+              <tr>
+                <th>Sistema</th>
+                <th style={{ width: 60 }}>{esB4 ? "No" : "Sí"}</th>
+                <th style={{ width: 60 }}>{esB4 ? "Sí" : "No"}</th>
+                <th>Detalle</th>
+              </tr>
+            </thead>
+            <tbody>
+              {hijos.map(hijo => {
+                const r = respuestas[hijo.id];
+                const valorBool = r?.valor_bool;
+                const mostrarDetalle = esB4 ? valorBool === true : valorBool === false;
+                const detalle = r?.valor_texto || r?.observacion || "";
+
+                return (
+                  <tr key={hijo.id}>
+                    <td className="fw-semibold">{hijo.descripcion}</td>
+                    <td className="text-center">
+                      {esB4
+                        ? (valorBool === false ? <span className="text-success">●</span> : "")
+                        : (valorBool === true ? <span className="text-success">●</span> : "")
+                      }
+                    </td>
+                    <td className="text-center">
+                      {esB4
+                        ? (valorBool === true ? <span className="text-danger">●</span> : "")
+                        : (valorBool === false ? <span className="text-danger">●</span> : "")
+                      }
+                    </td>
+                    <td>{mostrarDetalle && detalle ? detalle : "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
+  // ========== Render campos condicionales en vista ==========
+  const renderCamposCondicionales = (p, r) => {
+    if (!r) return null;
+
+    const camposSi = safeJsonParse(p.campos_si);
+    const opcionesNo = safeJsonParse(p.opciones_no);
+
+    const items = [];
+
+    // Campos para Sí
+    if (r.valor_bool === true && camposSi.length > 0) {
+      if (camposSi.includes("velocidad_mbps") && r.valor_cantidad != null) {
+        items.push(<small key="vel" className="text-info d-block"><strong>Velocidad:</strong> {r.valor_cantidad} Mbps</small>);
+      }
+      if (camposSi.includes("estado_internet") && r.valor_texto) {
+        items.push(<small key="estado_i" className="text-info d-block"><strong>Estado:</strong> {r.valor_texto}</small>);
+      }
+      if (camposSi.includes("hora_registro") && r.valor_texto) {
+        items.push(<small key="hora_reg" className="text-info d-block"><strong>Hora de registro:</strong> {r.valor_texto}</small>);
+      }
+      if (camposSi.includes("fecha_hora_ultima_carga") && r.valor_texto) {
+        items.push(<small key="ultima_carga" className="text-info d-block"><strong>Última carga:</strong> {r.valor_texto}</small>);
+      }
+      if (camposSi.includes("version_arfsis") && r.valor_texto) {
+        items.push(<small key="version" className="text-info d-block"><strong>Versión ARFSIS:</strong> {r.valor_texto}</small>);
+      }
+      if (camposSi.includes("fecha_act_maestros") && r.valor_fecha) {
+        items.push(<small key="maestros" className="text-info d-block"><strong>Últ. actualización maestros:</strong> {r.valor_fecha}</small>);
+      }
+      if (camposSi.includes("fecha_act_afiliados") && r.valor_texto_2) {
+        items.push(<small key="afiliados" className="text-info d-block"><strong>Últ. actualización afiliados:</strong> {r.valor_texto_2}</small>);
+      }
+      if (camposSi.includes("numeracion_inicial") && r.valor_texto) {
+        items.push(<small key="num_ini" className="text-info d-block"><strong>Numeración Inicial:</strong> {r.valor_texto}</small>);
+      }
+      if (camposSi.includes("numeracion_final") && r.valor_texto_2) {
+        items.push(<small key="num_fin" className="text-info d-block"><strong>Numeración Final:</strong> {r.valor_texto_2}</small>);
+      }
+      if ((camposSi.includes("cantidad_fuas_entregados") || camposSi.includes("cantidad_fuas_devueltos") || camposSi.includes("cantidad_fuas_observadas")) && r.valor_cantidad != null) {
+        items.push(<small key="cant" className="text-info d-block"><strong>{p.etiqueta_campo_condicional || "Cantidad"}:</strong> {r.valor_cantidad}</small>);
+      }
+      if (camposSi.includes("cantidad_fuas_anuladas") && r.valor_cantidad_2 != null) {
+        items.push(<small key="anuladas" className="text-info d-block"><strong>FUAs Anuladas:</strong> {r.valor_cantidad_2}</small>);
+      }
+      if (camposSi.includes("fecha_ultimo_tomo") && r.valor_fecha) {
+        items.push(<small key="ult_tomo" className="text-info d-block"><strong>Fecha último Tomo:</strong> {r.valor_fecha}</small>);
+      }
+    }
+
+    // Dropdown para No
+    if (r.valor_bool === false && opcionesNo.length > 0 && r.valor_texto) {
+      items.push(<small key="motivo_no" className="text-warning d-block"><strong>Motivo:</strong> {r.valor_texto}</small>);
+      if (r.valor_texto === "Otro" && r.observacion) {
+        items.push(<small key="otro_detalle" className="text-muted d-block"><strong>Detalle:</strong> {r.observacion}</small>);
+      }
+    }
+
+    // Campo condicional genérico (sin campos_si)
+    if (camposSi.length === 0) {
+      if (r.valor_cantidad != null && p.tipo_campo_condicional === "cantidad") {
+        items.push(<small key="cant_gen" className="text-info d-block"><strong>{p.etiqueta_campo_condicional || "Cantidad"}:</strong> {r.valor_cantidad}</small>);
+      }
+      if (r.valor_texto && p.tipo_campo_condicional === "texto" && !p.es_grupo) {
+        items.push(<small key="txt_gen" className="text-info d-block"><strong>{p.etiqueta_campo_condicional || "Detalle"}:</strong> {r.valor_texto}</small>);
+      }
+      if (r.valor_fecha && p.tipo_campo_condicional === "fecha") {
+        items.push(<small key="fecha_gen" className="text-info d-block"><strong>{p.etiqueta_campo_condicional || "Fecha"}:</strong> {r.valor_fecha}</small>);
+      }
+    }
+
+    return items.length > 0 ? <div className="mt-1">{items}</div> : null;
+  };
+
+  // ========== Render parámetro individual en vista ==========
+  const renderParametroView = (p) => {
+    // No renderizar hijos directamente
+    if (p.parametro_padre_id) return null;
+
+    const r = respuestas[p.id];
+    const isTableOnly = ["tabla_archivamiento", "tabla_control_calidad", "tabla_sepelios", "tabla_indicadores_diabetes"].includes(p.has_tabla_extra);
+    const isCantidadOnly = p.tipo_campo_condicional === "cantidad" && p.condicion_campo === "siempre" && !p.has_tabla_extra;
+    const ocultarBadge = isTableOnly || isCantidadOnly || p.es_grupo;
+
+    return (
+      <div key={p.id} className="d-flex justify-content-between align-items-start border-bottom py-2">
+        <div style={{ flex: 1 }}>
+          <div>{p.codigo ? `${p.codigo}. ` : ""}{p.descripcion}</div>
+
+          {/* Grupo de sub-parámetros */}
+          {p.es_grupo && renderGrupoSubParametrosView(p)}
+
+          {/* Campos condicionales */}
+          {renderCamposCondicionales(p, r)}
+
+          {/* Observación */}
+          {r?.observacion && !(r.valor_bool === false && safeJsonParse(p.opciones_no).length > 0) && !p.es_grupo && (
+            <small className="text-muted d-block mt-1">Obs: {r.observacion}</small>
+          )}
+
+          {/* Imágenes de B.3 */}
+          {p.codigo === "B.3" && (imagenesPorParametro[p.id] || []).length > 0 && (
+            <div className="d-flex flex-wrap gap-2 mt-2">
+              {imagenesPorParametro[p.id].map((img, idx) => (
+                <div key={idx} style={{ width: 120 }}>
+                  {img.signedUrl ? (
+                    <a href={img.signedUrl} target="_blank" rel="noreferrer">
+                      <img src={img.signedUrl} alt={`Evidencia ${idx + 1}`} className="img-thumbnail" style={{ width: 120, height: 90, objectFit: "cover" }} />
+                    </a>
+                  ) : (
+                    <span className="text-muted" style={{ fontSize: "0.8rem" }}>Sin imagen</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        {!ocultarBadge && (
+          <div className="ms-3">
+            {r?.valor_bool === true && <span className="badge bg-success">SI</span>}
+            {r?.valor_bool === false && <span className="badge bg-danger">NO</span>}
+            {r?.valor_bool == null && <span className="badge bg-secondary">—</span>}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -214,38 +438,7 @@ export default function SupervisionInformaticaView() {
             Object.entries(seccionesAgrupadas).map(([seccion, items]) => (
               <div key={seccion} className="mb-4">
                 <div className="fw-bold text-uppercase mb-2" style={{ fontSize: "0.85rem", letterSpacing: "0.4px" }}>{seccion}</div>
-                {items.map((p) => {
-                  const r = respuestas[p.id];
-                  const isTableOnly = p.has_tabla_extra === "tabla_archivamiento" || p.has_tabla_extra === "tabla_control_calidad";
-                  const isCantidadOnly = p.tipo_campo_condicional === "cantidad" && p.condicion_campo === "siempre" && !p.has_tabla_extra;
-                  return (
-                    <div key={p.id} className="d-flex justify-content-between align-items-start border-bottom py-2">
-                      <div style={{ flex: 1 }}>
-                        <div>{p.codigo ? `${p.codigo}. ` : ""}{p.descripcion}</div>
-                        {r?.valor_cantidad != null && (
-                          <small className="text-info d-block mt-1">
-                            <strong>{p.etiqueta_campo_condicional || "Cantidad"}:</strong> {r.valor_cantidad}
-                          </small>
-                        )}
-                        {r?.valor_texto && (
-                          <small className="text-info d-block mt-1">
-                            <strong>{p.etiqueta_campo_condicional || "Detalle"}:</strong> {r.valor_texto}
-                          </small>
-                        )}
-                        {r?.observacion && (
-                          <small className="text-muted d-block mt-1">Obs: {r.observacion}</small>
-                        )}
-                      </div>
-                      {!isTableOnly && !isCantidadOnly && (
-                        <div className="ms-3">
-                          {r?.valor_bool === true && <span className="badge bg-success">SI</span>}
-                          {r?.valor_bool === false && <span className="badge bg-danger">NO</span>}
-                          {r?.valor_bool == null && <span className="badge bg-secondary">—</span>}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                {items.map((p) => renderParametroView(p))}
               </div>
             ))
           )}
@@ -300,6 +493,68 @@ export default function SupervisionInformaticaView() {
                       <td>{c.cod_prestacional || "—"}</td><td>{c.nombre_profesional || "—"}</td><td>{c.observacion || "—"}</td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sepelios */}
+      {sepelioRows.length > 0 && (
+        <div className="card border-0 shadow-sm mb-3">
+          <div className="card-body">
+            <h6>Registro de Sepelios</h6>
+            <hr />
+            <div className="table-responsive">
+              <table className="table table-bordered table-sm" style={{ fontSize: "0.82rem" }}>
+                <thead className="table-light">
+                  <tr>
+                    <th>N°</th><th>DNI</th><th>Nombre del Afiliado</th><th>Fecha de Registro</th><th>Estado</th><th>Observación</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sepelioRows.map((s) => (
+                    <tr key={s.fila_numero}>
+                      <td>{s.fila_numero}</td><td>{s.dni || "—"}</td><td>{s.nombre_afiliado || "—"}</td>
+                      <td>{s.fecha_registro ? new Date(s.fecha_registro + "T00:00:00").toLocaleDateString() : "—"}</td>
+                      <td>{s.estado || "—"}</td><td>{s.observacion || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Indicadores Prestacionales - Diabetes */}
+      {Object.keys(indicadoresDiabetes).length > 0 && (
+        <div className="card border-0 shadow-sm mb-3">
+          <div className="card-body">
+            <h6>Indicadores Prestacionales — Diabetes Mellitus (IP.1)</h6>
+            <hr />
+            <div className="table-responsive">
+              <table className="table table-bordered table-sm" style={{ fontSize: "0.85rem" }}>
+                <thead className="table-light">
+                  <tr>
+                    <th>Indicador</th>
+                    <th style={{ width: 200 }}>Cantidad</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>HBA1c (Hemoglobina Glicosilada)</td>
+                    <td>{indicadoresDiabetes.hba1c ?? "—"}</td>
+                  </tr>
+                  <tr>
+                    <td>Microalbuminuria sérica</td>
+                    <td>{indicadoresDiabetes.microalbuminuria ?? "—"}</td>
+                  </tr>
+                  <tr>
+                    <td>Creatinina</td>
+                    <td>{indicadoresDiabetes.creatinina ?? "—"}</td>
+                  </tr>
                 </tbody>
               </table>
             </div>
