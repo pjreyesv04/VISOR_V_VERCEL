@@ -41,6 +41,7 @@ export default function SupervisionInformaticaForm() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sessionUser, setSessionUser] = useState(null);
+  const [intentoGuardar, setIntentoGuardar] = useState(false);
 
   // Cabecera
   const [correlativo, setCorrelativo] = useState(null);
@@ -76,7 +77,7 @@ export default function SupervisionInformaticaForm() {
     Array.from({ length: 10 }, () => ({ ...EMPTY_ARCHIVAMIENTO }))
   );
   const [controlCalidadRows, setControlCalidadRows] = useState(
-    Array.from({ length: 40 }, () => ({ ...EMPTY_CONTROL_CALIDAD }))
+    Array.from({ length: 10 }, () => ({ ...EMPTY_CONTROL_CALIDAD }))
   );
 
   // Tabla sepelios (C.5)
@@ -101,6 +102,11 @@ export default function SupervisionInformaticaForm() {
   const [firmaSupervisorUrl, setFirmaSupervisorUrl] = useState(null);
   const [firmaDigitadorUrl, setFirmaDigitadorUrl] = useState(null);
   const [firmaMedicoJefeUrl, setFirmaMedicoJefeUrl] = useState(null);
+
+  // DNI por firmante
+  const [dniSupervisor, setDniSupervisor] = useState("");
+  const [dniDigitador, setDniDigitador] = useState("");
+  const [dniMedicoJefe, setDniMedicoJefe] = useState("");
 
   // Imagenes por parámetro
   const [imagenesPorParametro, setImagenesPorParametro] = useState({});
@@ -254,7 +260,7 @@ export default function SupervisionInformaticaForm() {
       // 1) Traer supervisión
       const { data: sup, error: supErr } = await supabase
         .from("supervisiones")
-        .select("id,auditor_id,ris_id,establecimiento_id,correlativo,fecha,hora_inicio,hora_fin,medico_jefe,digitador,digitador_id,observaciones,recomendaciones,firma_url,firma_digitador_url,firma_medico_jefe_url,sector_trabajo,cel_correo_locador,otras_actividades")
+        .select("id,auditor_id,ris_id,establecimiento_id,correlativo,fecha,hora_inicio,hora_fin,medico_jefe,digitador,digitador_id,observaciones,recomendaciones,firma_url,firma_digitador_url,firma_medico_jefe_url,sector_trabajo,cel_correo_locador,otras_actividades,dni_supervisor,dni_digitador,dni_medico_jefe")
         .eq("id", supervisionId)
         .single();
 
@@ -295,6 +301,10 @@ export default function SupervisionInformaticaForm() {
       setFirmaSupervisorPath(sup.firma_url || null);
       setFirmaDigitadorPath(sup.firma_digitador_url || null);
       setFirmaMedicoJefePath(sup.firma_medico_jefe_url || null);
+
+      setDniSupervisor(sup.dni_supervisor || "");
+      setDniDigitador(sup.dni_digitador || "");
+      setDniMedicoJefe(sup.dni_medico_jefe || "");
 
       // Correlativo
       if (sup.correlativo == null) {
@@ -377,7 +387,7 @@ export default function SupervisionInformaticaForm() {
         .from("control_calidad_fua").select("*")
         .eq("supervision_id", supervisionId).order("fila_numero", { ascending: true });
       if (ccData && ccData.length > 0) {
-        const rows = Array.from({ length: 40 }, (_, i) => {
+        const rows = Array.from({ length: 10 }, (_, i) => {
           const existing = ccData.find((x) => x.fila_numero === i + 1);
           return existing
             ? { fua: existing.fua || "", fecha_atencion: existing.fecha_atencion || "", cod_prestacional: existing.cod_prestacional || "", nombre_profesional: existing.nombre_profesional || "", observacion: existing.observacion || "" }
@@ -498,9 +508,239 @@ export default function SupervisionInformaticaForm() {
     }
   };
 
+  // ========== VALIDACIÓN COMPLETA ==========
+  const validarFormulario = () => {
+    const errores = [];
+    const _safeJson = (str) => { if (!str) return []; try { return JSON.parse(str); } catch { return []; } };
+
+    // Mapa de padres para identificar grupo de cada hijo
+    const padreMap = {};
+    (parametros || []).forEach((p) => { if (p.es_grupo) padreMap[p.id] = p; });
+
+    (parametros || []).forEach((p) => {
+      if (!p.activo || p.activo === false) return;
+      const r = respuestas[p.id] || {};
+      const codigo = p.codigo || p.descripcion?.substring(0, 40);
+
+      const esTabla = ["tabla_archivamiento", "tabla_control_calidad", "tabla_sepelios", "tabla_indicadores_diabetes"].includes(p.has_tabla_extra);
+      const esSoloCantidad = p.tipo_campo_condicional === "cantidad" && p.condicion_campo === "siempre" && !p.has_tabla_extra;
+      const esGrupo = p.es_grupo;
+
+      // ── Sub-parámetros (hijos de grupos B.1, B.4) ──
+      if (p.parametro_padre_id) {
+        if (r.valor_bool === null || r.valor_bool === undefined) {
+          errores.push({ id: p.id, codigo, msg: `${codigo}: Debe seleccionar Sí o No` });
+          return;
+        }
+        const padre = padreMap[p.parametro_padre_id];
+        const esB4 = padre?.codigo === "B.4";
+        const esB1 = padre?.codigo === "B.1";
+
+        // B.4: Sí (inconveniente) → debe seleccionar Acción Realizada (opciones_si)
+        if (esB4 && r.valor_bool === true) {
+          const opSi = _safeJson(p.opciones_si);
+          if (opSi.length > 0 && !r.valor_texto?.trim()) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Debe seleccionar la Acción Realizada` });
+          }
+        }
+        // B.1: No (sin acceso) → debe seleccionar Detalle (opciones_no)
+        if (esB1 && r.valor_bool === false) {
+          const opNo = _safeJson(p.opciones_no);
+          if (opNo.length > 0 && !r.valor_texto?.trim()) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Debe seleccionar el Detalle` });
+          }
+        }
+        return;
+      }
+
+      // ── Parámetros con radios Sí/No (ni tabla, ni solo-cantidad, ni grupo) ──
+      if (!esTabla && !esSoloCantidad && !esGrupo) {
+        if (r.valor_bool === null || r.valor_bool === undefined) {
+          errores.push({ id: p.id, codigo, msg: `${codigo}: Debe seleccionar Sí o No` });
+          return;
+        }
+      }
+
+      // ── Campos de solo cantidad (condicion_campo = "siempre") ──
+      if (esSoloCantidad) {
+        if (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "") {
+          errores.push({ id: p.id, codigo, msg: `${codigo}: Debe ingresar la cantidad` });
+        }
+        // C.5: Si cantidad > 0 → tabla sepelios debe tener datos
+        if (p.has_tabla_extra === "tabla_sepelios" || p.codigo === "C.5") {
+          const cant = parseInt(r.valor_cantidad, 10) || 0;
+          if (cant > 0) {
+            const filasConDatos = sepelioRows.filter((s) => s.dni?.trim() || s.nombre_afiliado?.trim());
+            if (filasConDatos.length === 0) {
+              errores.push({ id: p.id, codigo, msg: `${codigo}: Debe registrar los datos en la tabla de sepelios (cantidad > 0)` });
+            }
+          }
+        }
+        return;
+      }
+
+      // ── Tabla Sepelios: C.5 (cantidad obligatoria + tabla si cantidad > 0) ──
+      if (p.has_tabla_extra === "tabla_sepelios" || p.codigo === "C.5") {
+        if (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "") {
+          errores.push({ id: p.id, codigo, msg: `${codigo}: Debe ingresar la cantidad` });
+        } else {
+          const cant = parseInt(r.valor_cantidad, 10) || 0;
+          if (cant > 0) {
+            const filasConDatos = sepelioRows.filter((s) => s.dni?.trim() || s.nombre_afiliado?.trim());
+            if (filasConDatos.length === 0) {
+              errores.push({ id: p.id, codigo, msg: `${codigo}: Debe registrar los datos en la tabla de sepelios (cantidad > 0)` });
+            }
+          }
+        }
+        return;
+      }
+
+      // ── Tablas obligatorias: G.3 (archivamiento) y H.1 (control calidad) ──
+      if (p.has_tabla_extra === "tabla_archivamiento") {
+        const filasConDatos = archivamientoRows.filter((a) => a.anio || a.nro_caja || a.nro_tomo || a.cantidad_fuas);
+        if (filasConDatos.length === 0) {
+          errores.push({ id: p.id, codigo, msg: `${codigo}: Debe registrar al menos una fila en la tabla de Archivamiento` });
+        }
+        return;
+      }
+      if (p.has_tabla_extra === "tabla_control_calidad") {
+        const filasConDatos = controlCalidadRows.filter((c) => c.fua?.trim() || c.nombre_profesional?.trim() || c.cod_prestacional?.trim());
+        if (filasConDatos.length === 0) {
+          errores.push({ id: p.id, codigo, msg: `${codigo}: Debe registrar al menos una fila en la tabla de Control de Calidad` });
+        }
+        return;
+      }
+      // ── IP.1: Indicadores Diabetes – todos los campos obligatorios ──
+      if (p.has_tabla_extra === "tabla_indicadores_diabetes") {
+        const campos = ["hba1c", "microalbuminuria", "creatinina"];
+        const vacios = campos.filter((c) => indicadoresDiabetes[c] === "" || indicadoresDiabetes[c] === null || indicadoresDiabetes[c] === undefined);
+        if (vacios.length > 0) {
+          errores.push({ id: p.id, codigo, msg: `${codigo}: Todos los campos de cantidad deben estar completos` });
+        }
+        return;
+      }
+
+      // ── Campos condicionales cuando se seleccionó Sí ──
+      if (r.valor_bool === true) {
+        const camposSi = _safeJson(p.campos_si);
+        const opcionesSi = _safeJson(p.opciones_si);
+
+        if (camposSi.length > 0) {
+          // E.1: numeracion_inicial (valor_texto) y numeracion_final (valor_texto_2) obligatorios
+          if (camposSi.includes("numeracion_inicial")) {
+            if (!r.valor_texto?.trim()) {
+              errores.push({ id: p.id, codigo, msg: `${codigo}: Falta la Numeración Inicial` });
+            }
+          }
+          if (camposSi.includes("numeracion_final")) {
+            if (!r.valor_texto_2?.trim()) {
+              errores.push({ id: p.id, codigo, msg: `${codigo}: Falta la Numeración Final` });
+            }
+          }
+          // Cantidades
+          if (camposSi.includes("cantidad_fuas_entregados") || camposSi.includes("cantidad_fuas_devueltos") || camposSi.includes("velocidad_mbps")) {
+            if (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "") {
+              errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar la cantidad` });
+            }
+          }
+          if (camposSi.includes("cantidad_fuas_anuladas")) {
+            if (r.valor_cantidad_2 === null || r.valor_cantidad_2 === undefined || r.valor_cantidad_2 === "") {
+              errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar FUAs anuladas` });
+            }
+          }
+          // B.3: version_arfsis obligatorio
+          if (camposSi.includes("version_arfsis")) {
+            if (!r.valor_texto?.trim()) {
+              errores.push({ id: p.id, codigo, msg: `${codigo}: Falta la Versión del ARFSIS Web` });
+            }
+          }
+          // B.3: fecha_act_maestros obligatorio
+          if (camposSi.includes("fecha_act_maestros")) {
+            if (!r.valor_fecha) {
+              errores.push({ id: p.id, codigo, msg: `${codigo}: Falta la Fecha última actualización de maestros` });
+            }
+          }
+          // B.3: fecha_act_afiliados obligatorio (se guarda en valor_texto_2)
+          if (camposSi.includes("fecha_act_afiliados")) {
+            if (!r.valor_texto_2?.trim()) {
+              errores.push({ id: p.id, codigo, msg: `${codigo}: Falta la Fecha última actualización de afiliados` });
+            }
+          }
+          // Otros campos de texto
+          if (camposSi.includes("hora_registro") || camposSi.includes("fecha_hora_ultima_carga")) {
+            if (!r.valor_texto?.trim()) {
+              errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar el campo de texto` });
+            }
+          }
+          if (camposSi.includes("estado_internet") && opcionesSi.length > 0) {
+            if (!r.valor_texto?.trim()) {
+              errores.push({ id: p.id, codigo, msg: `${codigo}: Debe seleccionar el estado` });
+            }
+          }
+          if (camposSi.includes("fecha_ultimo_tomo")) {
+            if (!r.valor_fecha) {
+              errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar la fecha` });
+            }
+          }
+        } else if (p.tipo_campo_condicional === "cantidad" && p.condicion_campo === "si") {
+          if (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "") {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar la cantidad` });
+          }
+        } else if (p.tipo_campo_condicional === "fecha" && p.condicion_campo === "si") {
+          if (!r.valor_fecha) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar la fecha` });
+          }
+        } else if (p.tipo_campo_condicional === "texto" && p.condicion_campo === "si" && !esGrupo) {
+          if (!r.valor_texto?.trim()) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar el texto` });
+          }
+        }
+      }
+
+      // ── Dropdown "Motivo" cuando se seleccionó No y hay opciones_no ──
+      if (r.valor_bool === false) {
+        const opcionesNo = _safeJson(p.opciones_no);
+        if (opcionesNo.length > 0 && !esGrupo) {
+          if (!r.valor_texto?.trim()) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Debe seleccionar un motivo` });
+          }
+          if (r.valor_texto === "Otro" && !r.observacion?.trim()) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Debe especificar el motivo "Otro"` });
+          }
+        }
+        if (p.tipo_campo_condicional === "cantidad" && p.condicion_campo === "no") {
+          if (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "") {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar la cantidad` });
+          }
+        }
+        if (p.tipo_campo_condicional === "fecha" && p.condicion_campo === "no") {
+          if (!r.valor_fecha) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar la fecha` });
+          }
+        }
+      }
+    });
+
+    return errores;
+  };
+
   // ========== GUARDAR TODO ==========
   const guardarTodoFinalizar = async () => {
     try {
+      // Validación completa
+      const errores = validarFormulario();
+
+      if (errores.length > 0) {
+        setIntentoGuardar(true);
+        const msgs = errores.slice(0, 5).map((e) => e.msg);
+        const mas = errores.length > 5 ? `\n...y ${errores.length - 5} campos más.` : "";
+        toast.error(`Faltan campos por completar:\n${msgs.join("\n")}${mas}`, { duration: 6000 });
+        // Scroll al primer error
+        const primerError = document.querySelector(".border-danger");
+        if (primerError) primerError.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+
       setSaving(true);
       const fin = nowAsText();
       setHoraFinTxt(fin.hora);
@@ -528,6 +768,9 @@ export default function SupervisionInformaticaForm() {
           sector_trabajo: sectorTrabajo || null,
           cel_correo_locador: celCorreoLocador || null,
           otras_actividades: otrasActividades,
+          dni_supervisor: dniSupervisor || null,
+          dni_digitador: dniDigitador || null,
+          dni_medico_jefe: dniMedicoJefe || null,
         })
         .eq("id", supervisionId);
       if (supErr) throw supErr;
@@ -646,16 +889,31 @@ export default function SupervisionInformaticaForm() {
     });
     setRespuestas(respVacias);
     setArchivamientoRows(Array.from({ length: 10 }, () => ({ ...EMPTY_ARCHIVAMIENTO })));
-    setControlCalidadRows(Array.from({ length: 40 }, () => ({ ...EMPTY_CONTROL_CALIDAD })));
+    setControlCalidadRows(Array.from({ length: 10 }, () => ({ ...EMPTY_CONTROL_CALIDAD })));
     setSepelioRows(Array.from({ length: 10 }, () => ({ ...EMPTY_SEPELIO })));
     setIndicadoresDiabetes({ hba1c: "", microalbuminuria: "", creatinina: "" });
     sigSupervisorRef.current?.clear();
     sigDigitadorRef.current?.clear();
     sigMedicoJefeRef.current?.clear();
+    setDniSupervisor("");
+    setDniDigitador("");
+    setDniMedicoJefe("");
     toast.success("Formulario limpiado");
   };
 
-  const imprimir = () => window.print();
+  const imprimir = () => {
+    const errores = validarFormulario();
+    if (errores.length > 0) {
+      setIntentoGuardar(true);
+      const msgs = errores.slice(0, 5).map((e) => e.msg);
+      const mas = errores.length > 5 ? `\n...y ${errores.length - 5} campos más.` : "";
+      toast.error(`No se puede imprimir. Faltan campos por completar:\n${msgs.join("\n")}${mas}`, { duration: 6000 });
+      const primerError = document.querySelector(".border-danger");
+      if (primerError) primerError.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    window.print();
+  };
 
   // ========== HELPERS TABLAS ==========
   const updateArchivamiento = (index, field, value) => {
@@ -869,7 +1127,7 @@ export default function SupervisionInformaticaForm() {
   // ========== RENDER: Tabla Control Calidad ==========
   const renderTablaControlCalidad = () => (
     <div className="mt-3 mb-3">
-      <label className="form-label fw-semibold text-primary">Ficha de Control de Calidad del Registro de Digitación de las FUAs (40 filas)</label>
+      <label className="form-label fw-semibold text-primary">Ficha de Control de Calidad del Registro de Digitación de las FUAs (10 filas)</label>
       <div className="table-responsive">
         <table className="table table-bordered table-sm" style={{ fontSize: "0.82rem" }}>
           <thead className="table-light">
@@ -954,9 +1212,14 @@ export default function SupervisionInformaticaForm() {
                   }
                 }
 
+                const hijoFaltaResp = intentoGuardar && (r.valor_bool === null || r.valor_bool === undefined);
+
                 return (
-                  <tr key={hijo.id}>
-                    <td className="align-middle fw-semibold">{hijo.descripcion}</td>
+                  <tr key={hijo.id} className={hijoFaltaResp ? "table-danger" : ""}>
+                    <td className="align-middle fw-semibold">
+                      {hijo.descripcion}
+                      {hijoFaltaResp && <span className="text-danger ms-1" style={{ fontSize: 11 }}>*</span>}
+                    </td>
                     <td className="text-center align-middle">
                       <input type="radio" name={`si_no_${hijo.id}`}
                         checked={esB4 ? r.valor_bool === false : r.valor_bool === true}
@@ -1028,11 +1291,67 @@ export default function SupervisionInformaticaForm() {
     const camposSi = safeJsonParse(p.campos_si);
     const camposNo = safeJsonParse(p.campos_no);
 
+    // Indicar si falta responder (después de intentar guardar)
+    const faltaResponder = (() => {
+      if (!intentoGuardar) return false;
+      // Sí/No sin responder
+      if (!ocultarRadiosSiNo && (r.valor_bool === null || r.valor_bool === undefined)) return true;
+      // Solo-cantidad sin valor
+      if (esSoloCantidad && (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "")) return true;
+      // C.5: tabla_sepelios → cantidad obligatoria + tabla con datos si cantidad > 0
+      if (p.has_tabla_extra === "tabla_sepelios" || p.codigo === "C.5") {
+        if (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "") return true;
+        const cant = parseInt(r.valor_cantidad, 10) || 0;
+        if (cant > 0) {
+          const filasConDatos = sepelioRows.filter((s) => s.dni?.trim() || s.nombre_afiliado?.trim());
+          if (filasConDatos.length === 0) return true;
+        }
+      }
+      // G.3: tabla_archivamiento → al menos una fila con datos
+      if (p.has_tabla_extra === "tabla_archivamiento") {
+        const filasConDatos = archivamientoRows.filter((a) => a.anio || a.nro_caja || a.nro_tomo || a.cantidad_fuas);
+        if (filasConDatos.length === 0) return true;
+      }
+      // H.1: tabla_control_calidad → al menos una fila con datos
+      if (p.has_tabla_extra === "tabla_control_calidad") {
+        const filasConDatos = controlCalidadRows.filter((c) => c.fua?.trim() || c.nombre_profesional?.trim() || c.cod_prestacional?.trim());
+        if (filasConDatos.length === 0) return true;
+      }
+      // IP.1: tabla_indicadores_diabetes → todos los campos obligatorios
+      if (p.has_tabla_extra === "tabla_indicadores_diabetes") {
+        const campos = ["hba1c", "microalbuminuria", "creatinina"];
+        const vacios = campos.filter((c) => indicadoresDiabetes[c] === "" || indicadoresDiabetes[c] === null || indicadoresDiabetes[c] === undefined);
+        if (vacios.length > 0) return true;
+      }
+      // Campos condicionales vacíos al responder Sí
+      if (r.valor_bool === true) {
+        if (camposSi.length > 0) {
+          if ((camposSi.includes("cantidad_fuas_entregados") || camposSi.includes("cantidad_fuas_devueltos") || camposSi.includes("velocidad_mbps")) && (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "")) return true;
+          if (camposSi.includes("cantidad_fuas_anuladas") && (r.valor_cantidad_2 === null || r.valor_cantidad_2 === undefined || r.valor_cantidad_2 === "")) return true;
+          if ((camposSi.includes("hora_registro") || camposSi.includes("version_arfsis") || camposSi.includes("fecha_hora_ultima_carga") || camposSi.includes("estado_internet")) && !r.valor_texto?.trim()) return true;
+          if ((camposSi.includes("fecha_ultimo_tomo") || camposSi.includes("fecha_act_maestros")) && !r.valor_fecha) return true;
+          // E.1: numeración inicial y final obligatorias
+          if (camposSi.includes("numeracion_inicial") && !r.valor_texto?.trim()) return true;
+          if (camposSi.includes("numeracion_final") && !r.valor_texto_2?.trim()) return true;
+          // B.3: fecha_act_afiliados obligatoria
+          if (camposSi.includes("fecha_act_afiliados") && !r.valor_texto_2?.trim()) return true;
+        } else {
+          if (p.tipo_campo_condicional === "cantidad" && p.condicion_campo === "si" && (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "")) return true;
+          if (p.tipo_campo_condicional === "fecha" && p.condicion_campo === "si" && !r.valor_fecha) return true;
+          if (p.tipo_campo_condicional === "texto" && p.condicion_campo === "si" && !p.es_grupo && !r.valor_texto?.trim()) return true;
+        }
+      }
+      // Dropdown motivo vacío al responder No
+      if (r.valor_bool === false && opcionesNo.length > 0 && !p.es_grupo && !r.valor_texto?.trim()) return true;
+      return false;
+    })();
+
     return (
-      <div className="mb-3" key={p.id}>
+      <div className={`mb-3${faltaResponder ? " border-start border-3 border-danger ps-2" : ""}`} key={p.id}>
         <div className="fw-semibold">
           {p.codigo ? `${p.codigo}. ` : ""}
           {p.descripcion}
+          {faltaResponder && <span className="text-danger ms-2" style={{ fontSize: 12 }}>* Obligatorio</span>}
         </div>
 
         <>
@@ -1205,7 +1524,7 @@ export default function SupervisionInformaticaForm() {
 
           {/* Observación por ítem (solo si no tiene opciones_no con dropdown) */}
           {p.requiere_observacion && !(r.valor_bool === false && opcionesNo.length > 0) && !p.es_grupo && (
-            <div className="mt-2">
+            <div className={`mt-2${!(r.observacion?.trim()) ? " obs-print-hide" : ""}`}>
               <label className="form-label">Observación</label>
               <textarea className="form-control" rows={2} value={r.observacion || ""} onChange={(e) => setResp(p.id, { observacion: e.target.value })} placeholder="Detalle / sustento..." />
             </div>
@@ -1334,7 +1653,7 @@ export default function SupervisionInformaticaForm() {
         <h5 className="m-0">Otras Actividades Realizadas por el Supervisor Informático</h5>
         <hr className="my-3" />
         {["A", "B", "C", "D", "E", "F"].map((letra) => (
-          <div key={letra} className="mb-3">
+          <div key={letra} className={`mb-3${!(otrasActividades[letra]?.trim()) ? " obs-print-hide" : ""}`}>
             <label className="form-label fw-semibold">{letra}.</label>
             <input
               type="text"
@@ -1351,11 +1670,11 @@ export default function SupervisionInformaticaForm() {
       <div className="acta-box p-3 mb-4">
         <h5 className="m-0">Observaciones y Recomendaciones</h5>
         <hr className="my-3" />
-        <div className="mb-3">
+        <div className={`mb-3${!observaciones?.trim() ? " obs-print-hide" : ""}`}>
           <label className="form-label fw-semibold">Observaciones en General</label>
           <textarea className="form-control" rows={5} value={observaciones} onChange={(e) => setObservaciones(e.target.value)} placeholder="Escriba observaciones generales..." />
         </div>
-        <div className="mb-3">
+        <div className={`mb-3${!recomendaciones?.trim() ? " obs-print-hide" : ""}`}>
           <label className="form-label fw-semibold">Recomendaciones</label>
           <textarea className="form-control" rows={4} value={recomendaciones} onChange={(e) => setRecomendaciones(e.target.value)} placeholder="Escriba recomendaciones..." />
         </div>
@@ -1416,6 +1735,10 @@ export default function SupervisionInformaticaForm() {
                 <button className="btn btn-outline-danger btn-sm" onClick={() => { setFirmaMedicoJefeUrl(null); setFirmaMedicoJefePath(null); }}>Re-firmar</button>
               )}
             </div>
+            <div className="mt-2">
+              <label className="form-label fw-semibold" style={{ fontSize: 13 }}>DNI</label>
+              <input type="text" className="form-control form-control-sm" style={{ maxWidth: 120 }} value={dniMedicoJefe} onChange={(e) => setDniMedicoJefe(e.target.value.replace(/\D/g, "").slice(0, 8))} placeholder="00000000" maxLength={8} />
+            </div>
           </div>
 
           {/* Locador/Digitador */}
@@ -1434,6 +1757,10 @@ export default function SupervisionInformaticaForm() {
                 <button className="btn btn-outline-danger btn-sm" onClick={() => { setFirmaDigitadorUrl(null); setFirmaDigitadorPath(null); }}>Re-firmar</button>
               )}
             </div>
+            <div className="mt-2">
+              <label className="form-label fw-semibold" style={{ fontSize: 13 }}>DNI</label>
+              <input type="text" className="form-control form-control-sm" style={{ maxWidth: 120 }} value={dniDigitador} onChange={(e) => setDniDigitador(e.target.value.replace(/\D/g, "").slice(0, 8))} placeholder="00000000" maxLength={8} />
+            </div>
           </div>
 
           {/* Supervisor Informático */}
@@ -1451,6 +1778,10 @@ export default function SupervisionInformaticaForm() {
               {firmaSupervisorUrl && (
                 <button className="btn btn-outline-danger btn-sm" onClick={() => { setFirmaSupervisorUrl(null); setFirmaSupervisorPath(null); }}>Re-firmar</button>
               )}
+            </div>
+            <div className="mt-2">
+              <label className="form-label fw-semibold" style={{ fontSize: 13 }}>DNI</label>
+              <input type="text" className="form-control form-control-sm" style={{ maxWidth: 120 }} value={dniSupervisor} onChange={(e) => setDniSupervisor(e.target.value.replace(/\D/g, "").slice(0, 8))} placeholder="00000000" maxLength={8} />
             </div>
           </div>
         </div>

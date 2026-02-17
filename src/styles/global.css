@@ -31,19 +31,210 @@
 }
 
 @media print {
-  .no-print {
+  /* === CONFIGURACIÓN DE PÁGINA === */
+  @page {
+    margin: 0.5cm;
+    size: A4;
+  }
+
+  /* === OCULTAR ELEMENTOS NO NECESARIOS === */
+  .no-print,
+  .obs-print-hide,
+  button,
+  .btn,
+  .toast-container,
+  nav,
+  .navbar,
+  footer {
     display: none !important;
   }
 
+  /* === TIPOGRAFÍA COMPACTA === */
   body {
+    font-size: 9pt !important;
+    line-height: 1.2 !important;
+    margin: 0 !important;
+    padding: 0 !important;
     background: #fff !important;
   }
 
-  .container {
+  /* === CONTENEDORES === */
+  .container,
+  .container-fluid {
     max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
   }
 
-  .acta-box {
+  /* === CARDS === */
+  .card {
+    border: 1px solid #ccc !important;
+    margin-bottom: 2px !important;
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+
+  .card-header {
+    padding: 2px 6px !important;
+    font-size: 9pt !important;
+  }
+
+  .card-body {
+    padding: 3px 6px !important;
+  }
+
+  /* === TABLAS COMPACTAS === */
+  .table {
+    font-size: 8pt !important;
+    margin-bottom: 2px !important;
+  }
+
+  .table th,
+  .table td {
+    padding: 1px 4px !important;
+    line-height: 1.1 !important;
+  }
+
+  .table-responsive {
+    overflow: visible !important;
+  }
+
+  table {
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+
+  tr {
+    break-inside: avoid;
     page-break-inside: avoid;
+  }
+
+  /* === ESPACIADO REDUCIDO === */
+  .row {
+    margin-bottom: 0 !important;
+  }
+
+  .mb-3, .mb-4, .mb-5, .my-3, .my-4, .my-5 {
+    margin-bottom: 2px !important;
+  }
+
+  .mt-3, .mt-4, .mt-5 {
+    margin-top: 2px !important;
+  }
+
+  .p-3, .p-4, .p-5, .py-3, .py-4, .py-5 {
+    padding: 2px !important;
+  }
+
+  .gap-2, .gap-3, .gap-4 {
+    gap: 2px !important;
+  }
+
+  /* === INPUTS Y SELECTS === */
+  .form-control,
+  .form-select {
+    font-size: 8pt !important;
+    padding: 1px 3px !important;
+    height: auto !important;
+    min-height: unset !important;
+    border: 1px solid #999 !important;
+  }
+
+  textarea.form-control {
+    min-height: 20px !important;
+    height: auto !important;
+  }
+
+  /* === RADIO / CHECKBOX === */
+  .form-check {
+    margin-bottom: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    min-height: unset !important;
+  }
+
+  .form-check-label {
+    font-size: 8pt !important;
+  }
+
+  /* === LABELS === */
+  label,
+  .form-label {
+    font-size: 8pt !important;
+    margin-bottom: 0 !important;
+  }
+
+  /* === ENCABEZADOS DE SECCIÓN === */
+  h3, .h3 {
+    font-size: 11pt !important;
+    margin-top: 3px !important;
+    margin-bottom: 2px !important;
+  }
+
+  h4, h5, h6, .h4, .h5, .h6 {
+    font-size: 10pt !important;
+    margin-top: 2px !important;
+    margin-bottom: 2px !important;
+  }
+
+  /* === ALERTAS === */
+  .alert {
+    padding: 2px 6px !important;
+    font-size: 8pt !important;
+    margin-bottom: 2px !important;
+  }
+
+  /* === FIRMAS COMPACTAS === */
+  .firma-box {
+    height: 80px !important;
+  }
+
+  .firma-canvas {
+    height: 80px !important;
+  }
+
+  /* === BORDES DE VALIDACIÓN === */
+  .border-danger {
+    border-color: #ccc !important;
+  }
+
+  .text-danger.small,
+  .text-danger[style*="font-size: 11"],
+  .text-danger[style*="font-size: 12"] {
+    display: none !important;
+  }
+
+  /* === ACTA Y SECCIONES: flujo libre entre páginas === */
+  .acta-box {
+    break-inside: auto !important;
+    page-break-inside: auto !important;
+    border: 1px solid #999 !important;
+    padding: 4px !important;
+    margin-bottom: 4px !important;
+  }
+
+  .section-box {
+    break-inside: auto !important;
+    page-break-inside: auto !important;
+    padding: 2px !important;
+  }
+
+  /* Títulos no se separan del contenido siguiente */
+  .section-title,
+  h4, h5 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  /* Separadores compactos */
+  hr {
+    margin-top: 2px !important;
+    margin-bottom: 2px !important;
+  }
+
+  /* Contenedor principal sin margen */
+  .container.my-4 {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
   }
 }

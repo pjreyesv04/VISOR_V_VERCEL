@@ -631,9 +631,9 @@ export default function SupervisionInformaticaView() {
           <hr />
           <div className="row g-3">
             {[
-              { label: "Médico Jefe del EESS", url: firmaUrls.medicoJefe },
-              { label: "Locador de Servicio OFSEG", url: firmaUrls.digitador },
-              { label: "Supervisor Informático OFSEG", url: firmaUrls.supervisor },
+              { label: "Médico Jefe del EESS", url: firmaUrls.medicoJefe, dni: supervision?.dni_medico_jefe },
+              { label: "Locador de Servicio OFSEG", url: firmaUrls.digitador, dni: supervision?.dni_digitador },
+              { label: "Supervisor Informático OFSEG", url: firmaUrls.supervisor, dni: supervision?.dni_supervisor },
             ].map((f) => (
               <div key={f.label} className="col-md-4 text-center">
                 <div className="border rounded bg-light d-flex align-items-center justify-content-center" style={{ height: 150 }}>
@@ -644,6 +644,7 @@ export default function SupervisionInformaticaView() {
                   )}
                 </div>
                 <small className="text-muted">{f.label}</small>
+                {f.dni && <div><small className="text-muted">DNI: {f.dni}</small></div>}
               </div>
             ))}
           </div>

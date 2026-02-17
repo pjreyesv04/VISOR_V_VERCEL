@@ -36,6 +36,7 @@ export default function SupervisionForm() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [intentoGuardar, setIntentoGuardar] = useState(false);
 
   const [sessionUser, setSessionUser] = useState(null);
 
@@ -591,8 +592,121 @@ export default function SupervisionForm() {
   // =========================
   // GUARDAR TODO
   // =========================
+  // ========== VALIDACIÓN COMPLETA ==========
+  const validarFormulario = () => {
+    const errores = [];
+
+    (parametros || []).forEach((p) => {
+      if (!p.activo || p.activo === false) return;
+      if (isDisabledByDependency(p)) return;
+      const r = respuestas[p.id] || {};
+      const codigo = p.codigo || p.descripcion?.substring(0, 40);
+
+      const esTabla = ["tabla_digitadores", "tabla_reactivos", "fua_verificados", "verificacion_fua_hc", "participantes"].includes(p.has_tabla_extra);
+      const esSoloCantidad = p.condicion_campo === "siempre" && ["cantidad", "cantidad_multiple"].includes(p.tipo_campo_condicional);
+      const ocultaRadios = esTabla || esSoloCantidad;
+
+      // 1) Parámetros con radios Sí/No
+      if (!ocultaRadios) {
+        if (r.valor_bool === null || r.valor_bool === undefined) {
+          errores.push({ id: p.id, codigo, msg: `${codigo}: Debe seleccionar Sí o No` });
+          return;
+        }
+      }
+
+      // 2) Solo cantidad o cantidad_multiple (siempre visible)
+      if (esSoloCantidad) {
+        if (p.tipo_campo_condicional === "cantidad") {
+          if (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "") {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar la cantidad` });
+          }
+        }
+        if (p.tipo_campo_condicional === "cantidad_multiple") {
+          if ((r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "") &&
+              (r.valor_cantidad_2 === null || r.valor_cantidad_2 === undefined || r.valor_cantidad_2 === "") &&
+              (r.valor_cantidad_3 === null || r.valor_cantidad_3 === undefined || r.valor_cantidad_3 === "")) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar las cantidades` });
+          }
+        }
+        return;
+      }
+
+      // 3) Campos condicionales cuando se respondió Sí
+      if (r.valor_bool === true) {
+        if (p.tipo_campo_condicional === "fecha" && (p.condicion_campo === "si" || p.condicion_campo === "siempre")) {
+          if (!r.valor_fecha) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar la fecha` });
+          }
+        }
+        if (p.tipo_campo_condicional === "cantidad" && p.condicion_campo === "si") {
+          if (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "") {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar la cantidad` });
+          }
+        }
+        if (p.tipo_campo_condicional === "cantidad_multiple" && p.condicion_campo === "si") {
+          if ((r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "") &&
+              (r.valor_cantidad_2 === null || r.valor_cantidad_2 === undefined || r.valor_cantidad_2 === "") &&
+              (r.valor_cantidad_3 === null || r.valor_cantidad_3 === undefined || r.valor_cantidad_3 === "")) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar las cantidades` });
+          }
+        }
+        if (p.tipo_campo_condicional === "texto" && p.condicion_campo === "si") {
+          if (!r.valor_texto?.trim()) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar el texto` });
+          }
+        }
+        if (p.tipo_campo_condicional === "texto_persona" && p.condicion_campo === "si") {
+          const partes = (r.valor_texto || "").split("|||");
+          if (!partes[0]?.trim()) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar nombre` });
+          }
+        }
+      }
+
+      // 4) Campos condicionales cuando se respondió No
+      if (r.valor_bool === false) {
+        if (p.tipo_campo_condicional === "fecha" && p.condicion_campo === "no") {
+          if (!r.valor_fecha) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar la fecha` });
+          }
+        }
+        if (p.tipo_campo_condicional === "cantidad" && p.condicion_campo === "no") {
+          if (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "") {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar la cantidad` });
+          }
+        }
+        if (p.tipo_campo_condicional === "texto" && p.condicion_campo === "no") {
+          if (!r.valor_texto?.trim()) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar el texto` });
+          }
+        }
+        if (p.tipo_campo_condicional === "texto_persona" && p.condicion_campo === "no") {
+          const partes = (r.valor_texto || "").split("|||");
+          if (!partes[0]?.trim()) {
+            errores.push({ id: p.id, codigo, msg: `${codigo}: Falta completar nombre` });
+          }
+        }
+      }
+    });
+
+    return errores;
+  };
+
   const guardarTodoFinalizar = async () => {
     try {
+      // Validación completa
+      const errores = validarFormulario();
+
+      if (errores.length > 0) {
+        setIntentoGuardar(true);
+        const msgs = errores.slice(0, 5).map((e) => e.msg);
+        const mas = errores.length > 5 ? `\n...y ${errores.length - 5} campos más.` : "";
+        toast.error(`Faltan campos por completar:\n${msgs.join("\n")}${mas}`, { duration: 6000 });
+        const primerError = document.querySelector(".border-danger");
+        if (primerError) primerError.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+
       setSaving(true);
 
       const fin = nowAsText();
@@ -772,7 +886,19 @@ export default function SupervisionForm() {
     toast.success("Formulario limpiado");
   };
 
-  const imprimir = () => window.print();
+  const imprimir = () => {
+    const errores = validarFormulario();
+    if (errores.length > 0) {
+      setIntentoGuardar(true);
+      const msgs = errores.slice(0, 5).map((e) => e.msg);
+      const mas = errores.length > 5 ? `\n...y ${errores.length - 5} campos más.` : "";
+      toast.error(`No se puede imprimir. Faltan campos por completar:\n${msgs.join("\n")}${mas}`, { duration: 6000 });
+      const primerError = document.querySelector(".border-danger");
+      if (primerError) primerError.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    window.print();
+  };
 
   // =========================
   // HELPERS PARA TABLAS DINÁMICAS
@@ -1158,12 +1284,53 @@ export default function SupervisionForm() {
     const ocultarRadiosSiNo = showTablaDigitadores || showTablaReactivos || showTablaFua || showTablaVerif
       || (p.condicion_campo === "siempre" && ["cantidad", "cantidad_multiple"].includes(p.tipo_campo_condicional));
 
+    // Indicar si falta responder (después de intentar guardar)
+    const faltaResponder = (() => {
+      if (!intentoGuardar || disabled) return false;
+      // Sí/No sin responder
+      if (!ocultarRadiosSiNo && (r.valor_bool === null || r.valor_bool === undefined)) return true;
+      // Solo-cantidad sin valor
+      if (ocultarRadiosSiNo && p.condicion_campo === "siempre") {
+        if (p.tipo_campo_condicional === "cantidad" && (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "")) return true;
+        if (p.tipo_campo_condicional === "cantidad_multiple" &&
+            (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "") &&
+            (r.valor_cantidad_2 === null || r.valor_cantidad_2 === undefined || r.valor_cantidad_2 === "") &&
+            (r.valor_cantidad_3 === null || r.valor_cantidad_3 === undefined || r.valor_cantidad_3 === "")) return true;
+      }
+      // Campos condicionales vacíos al responder Sí
+      if (r.valor_bool === true && showConditional) {
+        if (p.tipo_campo_condicional === "fecha" && !r.valor_fecha) return true;
+        if (p.tipo_campo_condicional === "cantidad" && (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "")) return true;
+        if (p.tipo_campo_condicional === "cantidad_multiple" &&
+            (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "") &&
+            (r.valor_cantidad_2 === null || r.valor_cantidad_2 === undefined || r.valor_cantidad_2 === "") &&
+            (r.valor_cantidad_3 === null || r.valor_cantidad_3 === undefined || r.valor_cantidad_3 === "")) return true;
+        if (p.tipo_campo_condicional === "texto" && !r.valor_texto?.trim()) return true;
+        if (p.tipo_campo_condicional === "texto_persona") {
+          const partes = (r.valor_texto || "").split("|||");
+          if (!partes[0]?.trim()) return true;
+        }
+      }
+      // Campos condicionales vacíos al responder No
+      if (r.valor_bool === false && !disabled) {
+        if (p.tipo_campo_condicional === "fecha" && p.condicion_campo === "no" && !r.valor_fecha) return true;
+        if (p.tipo_campo_condicional === "cantidad" && p.condicion_campo === "no" && (r.valor_cantidad === null || r.valor_cantidad === undefined || r.valor_cantidad === "")) return true;
+        if (p.tipo_campo_condicional === "texto" && p.condicion_campo === "no" && !r.valor_texto?.trim()) return true;
+        if (p.tipo_campo_condicional === "texto_persona" && p.condicion_campo === "no") {
+          const partes = (r.valor_texto || "").split("|||");
+          if (!partes[0]?.trim()) return true;
+        }
+      }
+      return false;
+    })();
+
     return (
-      <div className={`mb-3 ${disabled ? "opacity-50" : ""}`} style={disabled ? { pointerEvents: "none" } : {}} key={p.id}>
+      <div className={`mb-3 ${disabled ? "opacity-50" : ""}${faltaResponder ? " border-start border-3 border-danger ps-2" : ""}`} style={disabled ? { pointerEvents: "none" } : {}} key={p.id}>
         <div className="fw-semibold">
           {p.codigo ? `${p.codigo}. ` : ""}
           {p.descripcion}
           {disabled && <span className="badge bg-secondary ms-2" style={{ fontSize: 10 }}>Desactivado (ver {p.depende_de_codigo || "2.1"})</span>}
+          {faltaResponder && <span className="text-danger ms-2" style={{ fontSize: 12 }}>* Obligatorio</span>}
         </div>
 
         {!disabled && (
@@ -1352,7 +1519,7 @@ export default function SupervisionForm() {
 
             {/* Observación por ítem */}
             {p.requiere_observacion ? (
-              <div className="mt-2">
+              <div className={`mt-2${!(r.observacion?.trim()) ? " obs-print-hide" : ""}`}>
                 <label className="form-label">Observación</label>
                 <textarea
                   className="form-control"
@@ -1468,7 +1635,7 @@ export default function SupervisionForm() {
 
         <hr className="my-3" />
 
-        <div className="mb-3">
+        <div className={`mb-3${!observaciones?.trim() ? " obs-print-hide" : ""}`}>
           <label className="form-label fw-semibold">Observaciones</label>
           <textarea
             className="form-control"
@@ -1479,7 +1646,7 @@ export default function SupervisionForm() {
           />
         </div>
 
-        <div className="mb-3">
+        <div className={`mb-3${!recomendaciones?.trim() ? " obs-print-hide" : ""}`}>
           <label className="form-label fw-semibold">Recomendaciones</label>
           <textarea
             className="form-control"

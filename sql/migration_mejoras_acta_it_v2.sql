@@ -169,7 +169,7 @@ WHERE codigo = 'C.5' AND tipo_supervision = 'informatico';
 UPDATE parametros SET
   descripcion = 'El digitador tiene actualizado el registro de control de FUAs que entrega a las distintas áreas.',
   campos_si = '["cantidad_fuas_entregados","numeracion_inicial","numeracion_final"]',
-  opciones_no = '["Se Implemento Cuaderno de registro","Se implemento DRIVE de registro","Se capito al Digitador","Otro"]',
+  opciones_no = '["Se Implemento Cuaderno de registro","Se implemento DRIVE de registro","Se capacitó al Digitador","Otro"]',
   tipo_campo_condicional = 'cantidad',
   condicion_campo = 'si',
   etiqueta_campo_condicional = 'Cantidad de FUAs entregados'
@@ -179,7 +179,7 @@ WHERE codigo = 'E.1' AND tipo_supervision = 'informatico';
 UPDATE parametros SET
   descripcion = 'El digitador tiene actualizado el registro de devolución de FUAs que proporcionan las áreas correspondientes.',
   campos_si = '["cantidad_fuas_devueltos"]',
-  opciones_no = '["Se Implemento Cuaderno de registro","Se implemento DRIVE de registro","Se capito al Digitador","Otro"]',
+  opciones_no = '["Se Implemento Cuaderno de registro","Se implemento DRIVE de registro","Se capacitó al Digitador","Otro"]',
   tipo_campo_condicional = 'cantidad',
   condicion_campo = 'si',
   etiqueta_campo_condicional = 'Cantidad de FUAs devueltos para digitación'
