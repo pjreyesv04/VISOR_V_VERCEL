@@ -3,6 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../hooks/useAuth";
 import { BiPlusCircle, BiListUl, BiCheckCircle, BiTimeFive, BiUser, BiBuilding, BiPackage, BiDesktop } from "react-icons/bi";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from "recharts";
 
 export default function Dashboard() {
   const nav = useNavigate();
@@ -19,6 +22,10 @@ export default function Dashboard() {
     establecimientosMasVisitados: [],
     establecimientosSinInsumos: 0
   });
+
+  // Métricas de cumplimiento para viewer
+  const [viewerRisCumplimiento, setViewerRisCumplimiento] = useState([]);
+  const [viewerTopIncumplimiento, setViewerTopIncumplimiento] = useState([]);
 
   useEffect(() => {
     // No ejecutar hasta que el rol esté definido
@@ -136,11 +143,80 @@ export default function Dashboard() {
         });
       }
 
+      // Métricas de cumplimiento para Viewer
+      if (isViewer) {
+        const { data: sups } = await supabase
+          .from("supervisiones")
+          .select("id, ris_id, ris:ris_id(nombre)")
+          .in("estado", ["completado", "revisado"])
+          .or("tipo.eq.general,tipo.is.null");
+
+        const supIds = (sups || []).map((s) => s.id);
+
+        if (supIds.length > 0) {
+          // Cumplimiento por RIS
+          const { data: allResp } = await supabase
+            .from("respuestas")
+            .select("supervision_id, valor_bool")
+            .in("supervision_id", supIds);
+
+          const risMap = {};
+          for (const sup of sups || []) {
+            const risName = sup.ris?.nombre || "Sin RIS";
+            if (!risMap[risName]) risMap[risName] = { total: 0, si: 0 };
+          }
+          for (const r of allResp || []) {
+            const sup = sups.find((s) => s.id === r.supervision_id);
+            const risName = sup?.ris?.nombre || "Sin RIS";
+            if (!risMap[risName]) risMap[risName] = { total: 0, si: 0 };
+            risMap[risName].total++;
+            if (r.valor_bool === true) risMap[risName].si++;
+          }
+          const risData = Object.entries(risMap).map(([ris_nombre, d]) => ({
+            ris_nombre,
+            porcentaje: d.total > 0 ? Math.round((d.si / d.total) * 100) : 0,
+          }));
+          setViewerRisCumplimiento(risData);
+
+          // Top 10 incumplimientos
+          const { data: params } = await supabase
+            .from("parametros")
+            .select("id, codigo, descripcion")
+            .eq("activo", true);
+
+          const { data: allResp2 } = await supabase
+            .from("respuestas")
+            .select("parametro_id, valor_bool")
+            .in("supervision_id", supIds);
+
+          const paramCount = {};
+          (allResp2 || []).forEach((r) => {
+            if (!paramCount[r.parametro_id]) paramCount[r.parametro_id] = { total: 0, no: 0 };
+            paramCount[r.parametro_id].total++;
+            if (r.valor_bool === false) paramCount[r.parametro_id].no++;
+          });
+
+          const topNo = Object.entries(paramCount)
+            .filter(([, d]) => d.no > 0)
+            .sort(([, a], [, b]) => b.no - a.no)
+            .slice(0, 10)
+            .map(([paramId, d]) => {
+              const p = (params || []).find((x) => x.id === paramId);
+              return {
+                parametro: p ? `${p.codigo || ""} ${p.descripcion}`.trim() : paramId,
+                incumplimientos: d.no,
+                porcentaje: d.total > 0 ? Math.round((d.no / d.total) * 100) : 0,
+              };
+            });
+          setViewerTopIncumplimiento(topNo);
+        }
+      }
+
       setLoading(false);
     };
 
     fetchData();
-  }, [role, isAdmin, isSupervisorIT, user?.id]);
+  }, [role, isAdmin, isViewer, isSupervisorIT, user?.id]);
 
   const estadoBadge = (estado) => {
     const map = {
@@ -426,6 +502,72 @@ export default function Dashboard() {
             </div>
           </div>
         </>
+      )}
+
+      {/* VIEWER — Gráficos de cumplimiento */}
+      {isViewer && (
+        <div className="row g-3 mb-4">
+          {/* Gráfico % Cumplimiento por RIS */}
+          <div className="col-12">
+            <div className="card border-0 shadow-sm">
+              <div className="card-body">
+                <h6 className="mb-3">% Cumplimiento por RIS</h6>
+                {loading ? (
+                  <div className="text-center text-muted py-3">Cargando...</div>
+                ) : viewerRisCumplimiento.length === 0 ? (
+                  <p className="text-muted">Sin datos de supervisiones completadas</p>
+                ) : (
+                  <ResponsiveContainer width="100%" height={Math.max(200, viewerRisCumplimiento.length * 45)}>
+                    <BarChart data={viewerRisCumplimiento} layout="vertical">
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis type="number" domain={[0, 100]} unit="%" tick={{ fontSize: 11 }} />
+                      <YAxis dataKey="ris_nombre" type="category" width={160} tick={{ fontSize: 11 }} />
+                      <Tooltip formatter={(v) => `${v}%`} />
+                      <Bar dataKey="porcentaje" fill="#22c55e" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Tabla Top 10 Parámetros con Mayor Incumplimiento */}
+          <div className="col-12">
+            <div className="card border-0 shadow-sm">
+              <div className="card-body">
+                <h6 className="mb-3">Top 10 Parámetros con Mayor Incumplimiento</h6>
+                {loading ? (
+                  <div className="text-center text-muted py-3">Cargando...</div>
+                ) : viewerTopIncumplimiento.length === 0 ? (
+                  <p className="text-muted">Sin datos</p>
+                ) : (
+                  <div className="table-responsive">
+                    <table className="table table-sm table-hover mb-0" style={{ fontSize: "0.85rem" }}>
+                      <thead className="table-light">
+                        <tr>
+                          <th>#</th>
+                          <th>Parámetro</th>
+                          <th>Incumplimientos</th>
+                          <th>% Incumplimiento</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {viewerTopIncumplimiento.map((t, i) => (
+                          <tr key={i}>
+                            <td>{i + 1}</td>
+                            <td>{t.parametro}</td>
+                            <td><span className="badge bg-danger">{t.incumplimientos}</span></td>
+                            <td>{t.porcentaje}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Supervisiones Recientes */}

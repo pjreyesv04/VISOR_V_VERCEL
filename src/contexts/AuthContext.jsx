@@ -4,7 +4,7 @@ import { supabase } from "../lib/supabaseClient";
 const AuthContext = createContext(null);
 
 // Configuración
-const INACTIVITY_TIMEOUT = 10 * 60 * 1000; // 10 minutos
+const INACTIVITY_TIMEOUT = 20 * 60 * 1000; // 20 minutos
 const PROFILE_FETCH_TIMEOUT = 8000; // 8 segundos
 const MAX_RETRIES = 2;
 

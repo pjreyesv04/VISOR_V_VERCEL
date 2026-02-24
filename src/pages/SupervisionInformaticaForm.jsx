@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import SignatureCanvas from "react-signature-canvas";
 import toast from "react-hot-toast";
@@ -42,6 +42,10 @@ export default function SupervisionInformaticaForm() {
   const [saving, setSaving] = useState(false);
   const [sessionUser, setSessionUser] = useState(null);
   const [intentoGuardar, setIntentoGuardar] = useState(false);
+
+  // Auto-guardado
+  const autoSaveTimerRef = useRef(null);
+  const [autoSaveStatus, setAutoSaveStatus] = useState("idle"); // 'idle' | 'pending' | 'saving' | 'saved' | 'error'
 
   // Cabecera
   const [correlativo, setCorrelativo] = useState(null);
@@ -723,6 +727,128 @@ export default function SupervisionInformaticaForm() {
 
     return errores;
   };
+
+  // ========== AUTO-GUARDADO (borrador silencioso) ==========
+  const autoGuardar = useCallback(async () => {
+    if (loading || saving) return;
+    try {
+      setAutoSaveStatus("saving");
+
+      // Cabecera (sin cambiar estado ni hora_fin)
+      await supabase
+        .from("supervisiones")
+        .update({
+          medico_jefe: medicoJefeNombre || null,
+          digitador: digitadorNombre || null,
+          digitador_id: digitadorId || null,
+          observaciones: observaciones || null,
+          recomendaciones: recomendaciones || null,
+          sector_trabajo: sectorTrabajo || null,
+          cel_correo_locador: celCorreoLocador || null,
+          otras_actividades: otrasActividades,
+          dni_supervisor: dniSupervisor || null,
+          dni_digitador: dniDigitador || null,
+          dni_medico_jefe: dniMedicoJefe || null,
+        })
+        .eq("id", supervisionId);
+
+      // Respuestas
+      const rows = Object.entries(respuestas).map(([parametro_id, r]) => ({
+        supervision_id: supervisionId, parametro_id,
+        valor_bool: r.valor_bool ?? null, observacion: r.observacion ?? null,
+        valor_fecha: r.valor_fecha ?? null, valor_cantidad: r.valor_cantidad ?? null,
+        valor_cantidad_2: r.valor_cantidad_2 ?? null, valor_cantidad_3: r.valor_cantidad_3 ?? null,
+        valor_texto: r.valor_texto ?? null,
+      }));
+      if (rows.length > 0) {
+        await supabase.from("respuestas").upsert(rows, { onConflict: "supervision_id,parametro_id" });
+      }
+
+      // Archivamiento
+      await supabase.from("archivamiento_supervisado").delete().eq("supervision_id", supervisionId);
+      const archRows = archivamientoRows
+        .map((a, i) => ({ ...a, fila_numero: i + 1 }))
+        .filter((a) => a.anio || a.nro_caja || a.nro_tomo || a.cantidad_fuas);
+      if (archRows.length > 0) {
+        await supabase.from("archivamiento_supervisado").insert(archRows.map((a) => ({
+          supervision_id: supervisionId, fila_numero: a.fila_numero,
+          anio: a.anio ? parseInt(a.anio, 10) : null,
+          mes_inicio: a.mes_inicio || null, mes_fin: a.mes_fin || null,
+          nro_caja: a.nro_caja || null, nro_tomo: a.nro_tomo || null,
+          cantidad_foleo: a.cantidad_foleo ? parseInt(a.cantidad_foleo, 10) : null,
+          cantidad_fuas: a.cantidad_fuas ? parseInt(a.cantidad_fuas, 10) : null,
+          observacion: a.observacion || null,
+        })));
+      }
+
+      // Control calidad FUA
+      await supabase.from("control_calidad_fua").delete().eq("supervision_id", supervisionId);
+      const ccRows = controlCalidadRows
+        .map((c, i) => ({ ...c, fila_numero: i + 1 }))
+        .filter((c) => c.fua || c.nombre_profesional || c.cod_prestacional);
+      if (ccRows.length > 0) {
+        await supabase.from("control_calidad_fua").insert(ccRows.map((c) => ({
+          supervision_id: supervisionId, fila_numero: c.fila_numero,
+          fua: c.fua || null, fecha_atencion: c.fecha_atencion || null,
+          cod_prestacional: c.cod_prestacional || null,
+          nombre_profesional: c.nombre_profesional || null,
+          observacion: c.observacion || null,
+        })));
+      }
+
+      // Sepelios
+      await supabase.from("sepelios_supervisados").delete().eq("supervision_id", supervisionId);
+      const sepRows = sepelioRows
+        .map((s, i) => ({ ...s, fila_numero: i + 1 }))
+        .filter((s) => s.dni || s.nombre_afiliado);
+      if (sepRows.length > 0) {
+        await supabase.from("sepelios_supervisados").insert(sepRows.map((s) => ({
+          supervision_id: supervisionId, fila_numero: s.fila_numero,
+          dni: s.dni || null, nombre_afiliado: s.nombre_afiliado || null,
+          fecha_registro: s.fecha_registro || null, estado: s.estado || null,
+          observacion: s.observacion || null,
+        })));
+      }
+
+      // Indicadores prestacionales
+      await supabase.from("indicadores_prestacionales").delete().eq("supervision_id", supervisionId);
+      const ipRows = [];
+      ['hba1c', 'microalbuminuria', 'creatinina'].forEach((sub) => {
+        if (indicadoresDiabetes[sub]) {
+          ipRows.push({
+            supervision_id: supervisionId, indicador_codigo: 'IP.1',
+            sub_indicador: sub, valor_cantidad: parseInt(indicadoresDiabetes[sub], 10) || null,
+          });
+        }
+      });
+      if (ipRows.length > 0) await supabase.from("indicadores_prestacionales").insert(ipRows);
+
+      setAutoSaveStatus("saved");
+    } catch {
+      setAutoSaveStatus("error");
+    }
+  }, [
+    loading, saving, supervisionId,
+    medicoJefeNombre, digitadorNombre, digitadorId, observaciones, recomendaciones,
+    sectorTrabajo, celCorreoLocador, otrasActividades,
+    dniSupervisor, dniDigitador, dniMedicoJefe,
+    respuestas, archivamientoRows, controlCalidadRows, sepelioRows, indicadoresDiabetes,
+  ]);
+
+  // Dispara el auto-guardado 3 s después del último cambio
+  useEffect(() => {
+    if (loading) return;
+    setAutoSaveStatus("pending");
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(() => { autoGuardar(); }, 3000);
+    return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
+  }, [
+    respuestas, observaciones, recomendaciones,
+    medicoJefeNombre, digitadorNombre, digitadorId,
+    sectorTrabajo, celCorreoLocador, otrasActividades,
+    dniSupervisor, dniDigitador, dniMedicoJefe,
+    archivamientoRows, controlCalidadRows, sepelioRows, indicadoresDiabetes,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ========== GUARDAR TODO ==========
   const guardarTodoFinalizar = async () => {
@@ -1788,7 +1914,20 @@ export default function SupervisionInformaticaForm() {
       </div>
 
       {/* ==================== ACCIONES ==================== */}
-      <div className="d-flex gap-2 mt-4 no-print">
+      <div className="d-flex align-items-center gap-2 mt-4 no-print flex-wrap">
+        {/* Indicador de auto-guardado */}
+        <span style={{ fontSize: "0.78rem", minWidth: 180 }} className={
+          autoSaveStatus === "saving"  ? "text-secondary" :
+          autoSaveStatus === "saved"   ? "text-success" :
+          autoSaveStatus === "error"   ? "text-danger" :
+          autoSaveStatus === "pending" ? "text-warning" : "text-muted"
+        }>
+          {autoSaveStatus === "saving"  && "⟳ Guardando borrador..."}
+          {autoSaveStatus === "saved"   && "✓ Borrador guardado"}
+          {autoSaveStatus === "pending" && "● Cambios sin guardar"}
+          {autoSaveStatus === "error"   && "✕ Error al auto-guardar"}
+        </span>
+
         <button className="btn btn-outline-secondary" onClick={() => navigate("/supervisiones-informatica")}>Volver</button>
         <button className="btn btn-primary" disabled={saving} onClick={guardarTodoFinalizar}>
           {saving ? "Guardando..." : "Guardar"}

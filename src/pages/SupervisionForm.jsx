@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import SignatureCanvas from "react-signature-canvas";
 import toast from "react-hot-toast";
@@ -37,6 +37,10 @@ export default function SupervisionForm() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [intentoGuardar, setIntentoGuardar] = useState(false);
+
+  // Auto-guardado
+  const autoSaveTimerRef = useRef(null);
+  const [autoSaveStatus, setAutoSaveStatus] = useState("idle"); // 'idle' | 'pending' | 'saving' | 'saved' | 'error'
 
   const [sessionUser, setSessionUser] = useState(null);
 
@@ -691,6 +695,119 @@ export default function SupervisionForm() {
 
     return errores;
   };
+
+  // ========== AUTO-GUARDADO (borrador silencioso) ==========
+  const autoGuardar = useCallback(async () => {
+    if (loading || saving) return;
+    try {
+      setAutoSaveStatus("saving");
+
+      // Cabecera + observaciones (sin cambiar estado ni hora_fin)
+      await supabase
+        .from("supervisiones")
+        .update({
+          medico_jefe: medicoJefeNombre || null,
+          digitador: digitadorNombre || null,
+          digitador_id: digitadorId || null,
+          observaciones: observaciones || null,
+          recomendaciones: recomendaciones || null,
+          dni_supervisor: dniSupervisor || null,
+          dni_digitador: dniDigitador || null,
+          dni_medico_jefe: dniMedicoJefe || null,
+        })
+        .eq("id", supervisionId);
+
+      // Respuestas
+      const rows = Object.entries(respuestas).map(([parametro_id, r]) => ({
+        supervision_id: supervisionId,
+        parametro_id,
+        valor_bool: r.valor_bool ?? null,
+        observacion: r.observacion ?? null,
+        valor_fecha: r.valor_fecha ?? null,
+        valor_cantidad: r.valor_cantidad ?? null,
+        valor_cantidad_2: r.valor_cantidad_2 ?? null,
+        valor_cantidad_3: r.valor_cantidad_3 ?? null,
+        valor_texto: r.valor_texto ?? null,
+      }));
+      if (rows.length > 0) {
+        await supabase.from("respuestas").upsert(rows, { onConflict: "supervision_id,parametro_id" });
+      }
+
+      // Tablas extra
+      await supabase.from("participantes_capacitacion").delete().eq("supervision_id", supervisionId);
+      const partRows = participantes
+        .filter((p) => p.apellidos_nombres.trim() || p.dni.trim())
+        .map((p) => ({ supervision_id: supervisionId, apellidos_nombres: p.apellidos_nombres, dni: p.dni, grupo_ocupacional: p.grupo_ocupacional }));
+      if (partRows.length > 0) await supabase.from("participantes_capacitacion").insert(partRows);
+
+      await supabase.from("fua_verificados").delete().eq("supervision_id", supervisionId);
+      const fuaRows = fuaVerificados
+        .map((f, i) => ({ ...f, fila_numero: i + 1 }))
+        .filter((f) => f.numero_fua.trim() || f.codigo_prestacional.trim() || f.cpms.trim());
+      if (fuaRows.length > 0) {
+        await supabase.from("fua_verificados").insert(fuaRows.map((f) => ({
+          supervision_id: supervisionId, fila_numero: f.fila_numero,
+          numero_fua: f.numero_fua, fecha_atencion: f.fecha_atencion || null,
+          fecha_digitacion: f.fecha_digitacion || null, codigo_prestacional: f.codigo_prestacional,
+          cpms: f.cpms, observacion: f.observacion,
+        })));
+      }
+
+      await supabase.from("verificacion_fua_hc").delete().eq("supervision_id", supervisionId);
+      const verifRows = verificacionFuaHc
+        .map((v, i) => ({ ...v, fila_numero: i + 1 }))
+        .filter((v) => v.numero_fua.trim() || v.numero_hc.trim());
+      if (verifRows.length > 0) {
+        await supabase.from("verificacion_fua_hc").insert(verifRows.map((v) => ({
+          supervision_id: supervisionId, fila_numero: v.fila_numero,
+          numero_fua: v.numero_fua, numero_hc: v.numero_hc,
+          receta: v.receta || "", boleta: v.boleta || "", profesional: v.profesional || "",
+          gratuidad: v.gratuidad, observacion: v.observacion,
+        })));
+      }
+
+      await supabase.from("reactivos_insumos").delete().eq("supervision_id", supervisionId);
+      const reactRows = reactivosInsumos.filter((r) => r.disponible !== null);
+      if (reactRows.length > 0) {
+        await supabase.from("reactivos_insumos").insert(reactRows.map((r) => ({
+          supervision_id: supervisionId, nombre_reactivo: r.nombre_reactivo,
+          disponible: r.disponible, fecha_abastecimiento: r.fecha_abastecimiento || null,
+        })));
+      }
+
+      await supabase.from("respuestas_digitador").delete().eq("supervision_id", supervisionId);
+      const rdRows = Object.entries(respuestasDigitador)
+        .filter(([, val]) => val !== null && val !== undefined)
+        .map(([key, val]) => {
+          const [parametro_id, digitador_id] = key.split("__");
+          return { supervision_id: supervisionId, parametro_id, digitador_id, valor_bool: val };
+        });
+      if (rdRows.length > 0) await supabase.from("respuestas_digitador").insert(rdRows);
+
+      setAutoSaveStatus("saved");
+    } catch {
+      setAutoSaveStatus("error");
+    }
+  }, [
+    loading, saving, supervisionId,
+    medicoJefeNombre, digitadorNombre, digitadorId, observaciones, recomendaciones,
+    dniSupervisor, dniDigitador, dniMedicoJefe,
+    respuestas, participantes, fuaVerificados, verificacionFuaHc, reactivosInsumos, respuestasDigitador,
+  ]);
+
+  // Dispara el auto-guardado 3 s después del último cambio (solo en borrador, cuando cargó)
+  useEffect(() => {
+    if (loading) return;
+    setAutoSaveStatus("pending");
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(() => { autoGuardar(); }, 3000);
+    return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
+  }, [
+    respuestas, observaciones, recomendaciones,
+    medicoJefeNombre, digitadorNombre, digitadorId,
+    dniSupervisor, dniDigitador, dniMedicoJefe,
+    participantes, fuaVerificados, verificacionFuaHc, reactivosInsumos, respuestasDigitador,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const guardarTodoFinalizar = async () => {
     try {
@@ -1855,7 +1972,20 @@ export default function SupervisionForm() {
       </div>
 
       {/* ==================== ACCIONES ==================== */}
-      <div className="d-flex gap-2 mt-4 no-print">
+      <div className="d-flex align-items-center gap-2 mt-4 no-print flex-wrap">
+        {/* Indicador de auto-guardado */}
+        <span style={{ fontSize: "0.78rem", minWidth: 180 }} className={
+          autoSaveStatus === "saving" ? "text-secondary" :
+          autoSaveStatus === "saved"  ? "text-success" :
+          autoSaveStatus === "error"  ? "text-danger" :
+          autoSaveStatus === "pending" ? "text-warning" : "text-muted"
+        }>
+          {autoSaveStatus === "saving"  && "⟳ Guardando borrador..."}
+          {autoSaveStatus === "saved"   && "✓ Borrador guardado"}
+          {autoSaveStatus === "pending" && "● Cambios sin guardar"}
+          {autoSaveStatus === "error"   && "✕ Error al auto-guardar"}
+        </span>
+
         <button className="btn btn-outline-secondary" onClick={() => navigate("/supervisiones")}>
           Volver
         </button>
