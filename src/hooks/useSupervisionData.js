@@ -55,10 +55,11 @@ export function useSupervisionData(supervisionId) {
       const { data: est } = await supabase.from("establecimientos").select("nombre").eq("id", sup.establecimiento_id).single();
       setEessNombre(est?.nombre || "");
 
-      // 3. Parametros
+      // 3. Parametros (solo medico_auditor)
       const { data: params } = await supabase
         .from("parametros")
         .select("id, seccion, codigo, descripcion, requiere_observacion, orden, activo, tipo_campo_condicional, condicion_campo, etiqueta_campo_condicional")
+        .eq("tipo_supervision", "medico_auditor")
         .order("seccion", { ascending: true })
         .order("orden", { ascending: true });
 

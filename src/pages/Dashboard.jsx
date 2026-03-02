@@ -3,9 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../hooks/useAuth";
 import { BiPlusCircle, BiListUl, BiCheckCircle, BiTimeFive, BiUser, BiBuilding, BiPackage, BiDesktop } from "react-icons/bi";
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
 
 export default function Dashboard() {
   const nav = useNavigate();
@@ -23,9 +20,11 @@ export default function Dashboard() {
     establecimientosSinInsumos: 0
   });
 
-  // Métricas de cumplimiento para viewer
-  const [viewerRisCumplimiento, setViewerRisCumplimiento] = useState([]);
-  const [viewerTopIncumplimiento, setViewerTopIncumplimiento] = useState([]);
+  // Métricas para viewer
+  const [viewerStats, setViewerStats] = useState({ total: 0, completadas: 0, borradores: 0, revisadas: 0 });
+  const [viewerRecientes, setViewerRecientes] = useState([]);
+  const [viewerTopAuditores, setViewerTopAuditores] = useState([]);
+  const [viewerTopEstablecimientos, setViewerTopEstablecimientos] = useState([]);
 
   useEffect(() => {
     // No ejecutar hasta que el rol esté definido
@@ -145,71 +144,73 @@ export default function Dashboard() {
 
       // Métricas de cumplimiento para Viewer
       if (isViewer) {
-        const { data: sups } = await supabase
+        // Tarjetas de resumen (sin filtro auditor_id, supervisiones generales)
+        const vBase = (q) => q.or("tipo.eq.general,tipo.is.null");
+        const { count: vTotal }      = await vBase(supabase.from("supervisiones").select("id", { count: "exact", head: true }));
+        const { count: vCompletadas } = await vBase(supabase.from("supervisiones").select("id", { count: "exact", head: true }).eq("estado", "completado"));
+        const { count: vBorradores }  = await vBase(supabase.from("supervisiones").select("id", { count: "exact", head: true }).eq("estado", "borrador"));
+        const { count: vRevisadas }   = await vBase(supabase.from("supervisiones").select("id", { count: "exact", head: true }).eq("estado", "revisado"));
+        setViewerStats({ total: vTotal || 0, completadas: vCompletadas || 0, borradores: vBorradores || 0, revisadas: vRevisadas || 0 });
+
+        // Traer todas las supervisiones generales con auditor_id y establecimiento
+        const { data: todasSups } = await supabase
           .from("supervisiones")
-          .select("id, ris_id, ris:ris_id(nombre)")
-          .in("estado", ["completado", "revisado"])
+          .select("id, auditor_id, establecimiento:establecimiento_id(nombre)")
           .or("tipo.eq.general,tipo.is.null");
 
-        const supIds = (sups || []).map((s) => s.id);
-
-        if (supIds.length > 0) {
-          // Cumplimiento por RIS
-          const { data: allResp } = await supabase
-            .from("respuestas")
-            .select("supervision_id, valor_bool")
-            .in("supervision_id", supIds);
-
-          const risMap = {};
-          for (const sup of sups || []) {
-            const risName = sup.ris?.nombre || "Sin RIS";
-            if (!risMap[risName]) risMap[risName] = { total: 0, si: 0 };
-          }
-          for (const r of allResp || []) {
-            const sup = sups.find((s) => s.id === r.supervision_id);
-            const risName = sup?.ris?.nombre || "Sin RIS";
-            if (!risMap[risName]) risMap[risName] = { total: 0, si: 0 };
-            risMap[risName].total++;
-            if (r.valor_bool === true) risMap[risName].si++;
-          }
-          const risData = Object.entries(risMap).map(([ris_nombre, d]) => ({
-            ris_nombre,
-            porcentaje: d.total > 0 ? Math.round((d.si / d.total) * 100) : 0,
-          }));
-          setViewerRisCumplimiento(risData);
-
-          // Top 10 incumplimientos
-          const { data: params } = await supabase
-            .from("parametros")
-            .select("id, codigo, descripcion")
-            .eq("activo", true);
-
-          const { data: allResp2 } = await supabase
-            .from("respuestas")
-            .select("parametro_id, valor_bool")
-            .in("supervision_id", supIds);
-
-          const paramCount = {};
-          (allResp2 || []).forEach((r) => {
-            if (!paramCount[r.parametro_id]) paramCount[r.parametro_id] = { total: 0, no: 0 };
-            paramCount[r.parametro_id].total++;
-            if (r.valor_bool === false) paramCount[r.parametro_id].no++;
-          });
-
-          const topNo = Object.entries(paramCount)
-            .filter(([, d]) => d.no > 0)
-            .sort(([, a], [, b]) => b.no - a.no)
-            .slice(0, 10)
-            .map(([paramId, d]) => {
-              const p = (params || []).find((x) => x.id === paramId);
-              return {
-                parametro: p ? `${p.codigo || ""} ${p.descripcion}`.trim() : paramId,
-                incumplimientos: d.no,
-                porcentaje: d.total > 0 ? Math.round((d.no / d.total) * 100) : 0,
-              };
-            });
-          setViewerTopIncumplimiento(topNo);
+        // Resolver nombres de auditores via RPC (SECURITY DEFINER, no afecta RLS)
+        const uniqueAuditorIds = [...new Set((todasSups || []).map((s) => s.auditor_id).filter(Boolean))];
+        let profileMap = {};
+        if (uniqueAuditorIds.length > 0) {
+          const { data: profiles } = await supabase.rpc("get_user_nombres", { user_ids: uniqueAuditorIds });
+          (profiles || []).forEach((p) => { profileMap[p.user_id] = p.nombre; });
         }
+
+        // Top auditores
+        const auditorCounts = {};
+        (todasSups || []).forEach((s) => {
+          if (!s.auditor_id) return;
+          const nombre = profileMap[s.auditor_id] || "Sin nombre";
+          auditorCounts[nombre] = (auditorCounts[nombre] || 0) + 1;
+        });
+        const topAuditores = Object.entries(auditorCounts)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 10)
+          .map(([nombre, cantidad]) => ({ nombre, cantidad }));
+        setViewerTopAuditores(topAuditores);
+
+        // Top establecimientos
+        const eessCounts = {};
+        (todasSups || []).forEach((s) => {
+          const nombre = s.establecimiento?.nombre || "Sin establecimiento";
+          eessCounts[nombre] = (eessCounts[nombre] || 0) + 1;
+        });
+        const topEess = Object.entries(eessCounts)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 10)
+          .map(([nombre, cantidad]) => ({ nombre, cantidad }));
+        setViewerTopEstablecimientos(topEess);
+
+        // Últimas 10 supervisiones con nombre de auditor resuelto
+        const { data: vRecientesRaw } = await supabase
+          .from("supervisiones")
+          .select("id, correlativo, fecha, estado, tipo, ris:ris_id(nombre), establecimiento:establecimiento_id(nombre), auditor_id")
+          .or("tipo.eq.general,tipo.is.null")
+          .order("fecha", { ascending: false })
+          .limit(10);
+
+        // Resolver nombres de auditores para recientes (puede haber ids nuevos)
+        const recAuditorIds = [...new Set((vRecientesRaw || []).map((s) => s.auditor_id).filter(Boolean))];
+        const missingIds = recAuditorIds.filter((id) => !profileMap[id]);
+        if (missingIds.length > 0) {
+          const { data: extraProfiles } = await supabase.rpc("get_user_nombres", { user_ids: missingIds });
+          (extraProfiles || []).forEach((p) => { profileMap[p.user_id] = p.nombre; });
+        }
+        const vRecientes = (vRecientesRaw || []).map((s) => ({
+          ...s,
+          auditorNombre: s.auditor_id ? (profileMap[s.auditor_id] || "—") : "—",
+        }));
+        setViewerRecientes(vRecientes);
       }
 
       setLoading(false);
@@ -504,60 +505,192 @@ export default function Dashboard() {
         </>
       )}
 
-      {/* VIEWER — Gráficos de cumplimiento */}
+      {/* VIEWER — Tarjetas de resumen */}
       {isViewer && (
         <div className="row g-3 mb-4">
-          {/* Gráfico % Cumplimiento por RIS */}
-          <div className="col-12">
+          <div className="col-sm-6 col-xl-3">
             <div className="card border-0 shadow-sm">
-              <div className="card-body">
-                <h6 className="mb-3">% Cumplimiento por RIS</h6>
+              <div className="card-body d-flex align-items-center gap-3">
+                <div className="rounded-3 p-2" style={{ background: "#ede9fe" }}>
+                  <BiListUl size={28} color="#7c3aed" />
+                </div>
+                <div>
+                  <div className="text-muted" style={{ fontSize: "0.8rem" }}>Total</div>
+                  <h4 className="mb-0">{loading ? "..." : viewerStats.total}</h4>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="col-sm-6 col-xl-3">
+            <div className="card border-0 shadow-sm">
+              <div className="card-body d-flex align-items-center gap-3">
+                <div className="rounded-3 p-2" style={{ background: "#fef3c7" }}>
+                  <BiTimeFive size={28} color="#d97706" />
+                </div>
+                <div>
+                  <div className="text-muted" style={{ fontSize: "0.8rem" }}>Borradores</div>
+                  <h4 className="mb-0">{loading ? "..." : viewerStats.borradores}</h4>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="col-sm-6 col-xl-3">
+            <div className="card border-0 shadow-sm">
+              <div className="card-body d-flex align-items-center gap-3">
+                <div className="rounded-3 p-2" style={{ background: "#d1fae5" }}>
+                  <BiCheckCircle size={28} color="#059669" />
+                </div>
+                <div>
+                  <div className="text-muted" style={{ fontSize: "0.8rem" }}>Completadas</div>
+                  <h4 className="mb-0">{loading ? "..." : viewerStats.completadas}</h4>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="col-sm-6 col-xl-3">
+            <div className="card border-0 shadow-sm">
+              <div className="card-body d-flex align-items-center gap-3">
+                <div className="rounded-3 p-2" style={{ background: "#dbeafe" }}>
+                  <BiCheckCircle size={28} color="#2563eb" />
+                </div>
+                <div>
+                  <div className="text-muted" style={{ fontSize: "0.8rem" }}>Revisadas</div>
+                  <h4 className="mb-0">{loading ? "..." : viewerStats.revisadas}</h4>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIEWER — Auditores y Establecimientos */}
+      {isViewer && (
+        <div className="row g-3 mb-4">
+          {/* Top Auditores */}
+          <div className="col-lg-6">
+            <div className="card border-0 shadow-sm h-100">
+              <div className="card-header bg-white d-flex align-items-center gap-2">
+                <BiUser size={20} className="text-primary" />
+                <h6 className="mb-0">Auditores con más Supervisiones</h6>
+              </div>
+              <div className="card-body p-0">
                 {loading ? (
                   <div className="text-center text-muted py-3">Cargando...</div>
-                ) : viewerRisCumplimiento.length === 0 ? (
-                  <p className="text-muted">Sin datos de supervisiones completadas</p>
+                ) : viewerTopAuditores.length === 0 ? (
+                  <div className="text-center text-muted py-3">Sin datos</div>
                 ) : (
-                  <ResponsiveContainer width="100%" height={Math.max(200, viewerRisCumplimiento.length * 45)}>
-                    <BarChart data={viewerRisCumplimiento} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis type="number" domain={[0, 100]} unit="%" tick={{ fontSize: 11 }} />
-                      <YAxis dataKey="ris_nombre" type="category" width={160} tick={{ fontSize: 11 }} />
-                      <Tooltip formatter={(v) => `${v}%`} />
-                      <Bar dataKey="porcentaje" fill="#22c55e" radius={[0, 4, 4, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <table className="table table-sm table-hover mb-0" style={{ fontSize: "0.85rem" }}>
+                    <thead className="table-light">
+                      <tr>
+                        <th className="ps-3">#</th>
+                        <th>Auditor</th>
+                        <th className="text-end pe-3">Supervisiones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {viewerTopAuditores.map((a, i) => (
+                        <tr key={i}>
+                          <td className="ps-3 text-muted">{i + 1}</td>
+                          <td>{a.nombre}</td>
+                          <td className="text-end pe-3">
+                            <span className="badge bg-primary rounded-pill">{a.cantidad}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 )}
               </div>
             </div>
           </div>
 
-          {/* Tabla Top 10 Parámetros con Mayor Incumplimiento */}
-          <div className="col-12">
-            <div className="card border-0 shadow-sm">
-              <div className="card-body">
-                <h6 className="mb-3">Top 10 Parámetros con Mayor Incumplimiento</h6>
+          {/* Top Establecimientos */}
+          <div className="col-lg-6">
+            <div className="card border-0 shadow-sm h-100">
+              <div className="card-header bg-white d-flex align-items-center gap-2">
+                <BiBuilding size={20} className="text-success" />
+                <h6 className="mb-0">Establecimientos más Supervisados</h6>
+              </div>
+              <div className="card-body p-0">
                 {loading ? (
                   <div className="text-center text-muted py-3">Cargando...</div>
-                ) : viewerTopIncumplimiento.length === 0 ? (
-                  <p className="text-muted">Sin datos</p>
+                ) : viewerTopEstablecimientos.length === 0 ? (
+                  <div className="text-center text-muted py-3">Sin datos</div>
+                ) : (
+                  <table className="table table-sm table-hover mb-0" style={{ fontSize: "0.85rem" }}>
+                    <thead className="table-light">
+                      <tr>
+                        <th className="ps-3">#</th>
+                        <th>Establecimiento</th>
+                        <th className="text-end pe-3">Supervisiones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {viewerTopEstablecimientos.map((e, i) => (
+                        <tr key={i}>
+                          <td className="ps-3 text-muted">{i + 1}</td>
+                          <td>{e.nombre}</td>
+                          <td className="text-end pe-3">
+                            <span className="badge bg-success rounded-pill">{e.cantidad}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Últimas 10 supervisiones para Viewer */}
+          <div className="col-12">
+            <div className="card border-0 shadow-sm">
+              <div className="card-header bg-white d-flex justify-content-between align-items-center">
+                <h6 className="mb-0">Últimas 10 Supervisiones</h6>
+                <button className="btn btn-sm btn-outline-primary" onClick={() => nav("/supervisiones")}>
+                  Ver todas
+                </button>
+              </div>
+              <div className="card-body p-0">
+                {loading ? (
+                  <div className="p-3 text-center text-muted">Cargando...</div>
+                ) : viewerRecientes.length === 0 ? (
+                  <div className="p-3 text-center text-muted">No hay supervisiones registradas</div>
                 ) : (
                   <div className="table-responsive">
                     <table className="table table-sm table-hover mb-0" style={{ fontSize: "0.85rem" }}>
                       <thead className="table-light">
                         <tr>
-                          <th>#</th>
-                          <th>Parámetro</th>
-                          <th>Incumplimientos</th>
-                          <th>% Incumplimiento</th>
+                          <th>N°</th>
+                          <th>Fecha</th>
+                          <th>RIS</th>
+                          <th>Establecimiento</th>
+                          <th>Auditor</th>
+                          <th>Estado</th>
+                          <th></th>
                         </tr>
                       </thead>
                       <tbody>
-                        {viewerTopIncumplimiento.map((t, i) => (
-                          <tr key={i}>
-                            <td>{i + 1}</td>
-                            <td>{t.parametro}</td>
-                            <td><span className="badge bg-danger">{t.incumplimientos}</span></td>
-                            <td>{t.porcentaje}%</td>
+                        {viewerRecientes.map((s) => (
+                          <tr key={s.id}>
+                            <td>{s.correlativo ?? "—"}</td>
+                            <td>{s.fecha ? new Date(s.fecha).toLocaleDateString() : "—"}</td>
+                            <td>{s.ris?.nombre || "—"}</td>
+                            <td>{s.establecimiento?.nombre || "—"}</td>
+                            <td style={{ maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {s.auditorNombre || "—"}
+                            </td>
+                            <td>
+                              <span className={`badge ${estadoBadge(s.estado)}`}>{s.estado}</span>
+                            </td>
+                            <td>
+                              <button
+                                className="btn btn-sm btn-outline-primary"
+                                onClick={() => nav(`/supervision/${s.id}/ver`)}
+                              >
+                                Ver
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -570,8 +703,8 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Supervisiones Recientes */}
-      <div className="card border-0 shadow-sm">
+      {/* Supervisiones Recientes — solo para roles no-viewer */}
+      {!isViewer && <div className="card border-0 shadow-sm">
         <div className="card-header bg-white d-flex justify-content-between align-items-center">
           <h6 className="mb-0">Supervisiones Recientes</h6>
           <button className="btn btn-sm btn-outline-primary" onClick={() => nav("/supervisiones")}>
@@ -626,7 +759,7 @@ export default function Dashboard() {
             </div>
           )}
         </div>
-      </div>
+      </div>}
 
       {/* Métricas adicionales para Admin */}
       {isAdmin && (
