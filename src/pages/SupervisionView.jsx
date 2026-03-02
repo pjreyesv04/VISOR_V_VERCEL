@@ -25,7 +25,12 @@ export default function SupervisionView() {
     return <div className="alert alert-danger">No se encontro la supervision.</div>;
   }
 
-  const fmt = (iso) => (iso ? new Date(iso).toLocaleDateString() : "—");
+  const fmt = (iso) => {
+    if (!iso) return "—";
+    const dateStr = iso.split("T")[0]; // "2026-03-02"
+    const [year, month, day] = dateStr.split("-");
+    return `${parseInt(day)}/${parseInt(month)}/${year}`;
+  };
   const fmtTime = (iso) =>
     iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
 
@@ -120,8 +125,9 @@ export default function SupervisionView() {
                 </div>
                 {items.map((p) => {
                   const r = respuestas[p.id];
+                  const sinRespuesta = !r || (r.valor_bool === null && !r.valor_texto && r.valor_cantidad == null && !r.valor_fecha);
                   return (
-                    <div key={p.id} className="d-flex justify-content-between align-items-start border-bottom py-2">
+                    <div key={p.id} className={`d-flex justify-content-between align-items-start border-bottom py-2${sinRespuesta ? " print-hide-empty" : ""}`}>
                       <div style={{ flex: 1 }}>
                         <div>
                           {p.codigo ? `${p.codigo}. ` : ""}
